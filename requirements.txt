@@ -1,0 +1,12 @@
+lightning
+timm
+torch
+torchvision
+pyarrow
+matplotlib
+numpy<2
+Pillow
+jsonargparse[signatures]
+tensorboard
+psutil
+jupyter
