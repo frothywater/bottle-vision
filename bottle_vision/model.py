@@ -32,6 +32,7 @@ class IllustEmbeddingModel(nn.Module):
         tag_embed_dim: int,
         artist_embed_dim: int,
         character_embed_dim: int,
+        cls_token: bool,
         reg_tokens: int,
         dropout: float,
         tag_temp: float,
@@ -42,7 +43,14 @@ class IllustEmbeddingModel(nn.Module):
 
         # Backbone
         self.backbone = timm.create_model(
-            backbone_variant, img_size=image_size, num_classes=0, reg_tokens=reg_tokens, act_layer="gelu_tanh"
+            backbone_variant,
+            img_size=image_size,
+            num_classes=0,
+            class_token=cls_token,
+            reg_tokens=reg_tokens,
+            global_pool="token" if cls_token else "avg",
+            fc_norm=False,
+            act_layer="gelu_tanh",
         )
 
         # Projection heads
