@@ -54,7 +54,8 @@ def central_contrastive_loss(
     labels: torch.Tensor,
     temp: Union[float, torch.Tensor],
     params: ContrastiveLossParams,
-    eps: float = 1e-8,
+    eps: float = 1e-6,
+    max_exp_value: float = 30.0,
 ) -> torch.Tensor:
     """Central contrastive loss adapted for multi-label supervised case with class weights.
 
@@ -75,13 +76,20 @@ def central_contrastive_loss(
         - [Center Contrastive Loss for Metric Learning](https://arxiv.org/abs/2308.00458)
         - [Class Prototypes Based Contrastive Learning for Classifying Multi-Label and Fine-Grained Educational Videos](https://openaccess.thecvf.com/content/CVPR2023/html/Gupta_Class_Prototypes_Based_Contrastive_Learning_for_Classifying_Multi-Label_and_Fine-Grained_CVPR_2023_paper.html)
         - [Supervised Contrastive Learning](https://arxiv.org/abs/2004.11362)
+
+    Note:
+        Too small eps (1e-8) for fp16 training may cause NaN loss values.
     """
+    # compute a per-sample shift to improve stability (log-sum-exp trick)
+    sim_div = sim / temp
+    shift = sim_div.max(dim=1, keepdim=True).values
+
     # negative samples, broadcasted
-    negatives = torch.exp(sim / temp) * (1 - labels)
+    negatives = torch.exp(torch.clamp(sim_div - shift, max=max_exp_value)) * (1 - labels)
     negatives = negatives.sum(dim=1, keepdim=True)
 
     # positive samples
-    positives = torch.exp((sim - params.margin) / temp) * labels
+    positives = torch.exp(torch.clamp(sim_div - shift - params.margin / temp, max=max_exp_value)) * labels
 
     # log ratio, mask out negative samples
     ratio = positives / (positives + negatives + eps)
@@ -93,4 +101,5 @@ def central_contrastive_loss(
     loss = -(log_ratio + params.central_weight * central_loss)
     # average over positive labels
     loss = loss.sum(dim=1) / (labels.sum(dim=1) + eps)
-    return loss.sum()
+    # average over samples
+    return loss.mean()
