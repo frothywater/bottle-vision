@@ -1,3 +1,4 @@
+import gc
 import json
 import logging
 import time
@@ -17,6 +18,8 @@ from bottle_vision.dataset import IllustDatasetItem
 from .dataloader import InterleavedDataItem
 from .losses import ContrastiveLossConfig, ContrastiveLossParams, LossComponents, LossWeights
 from .model import IllustEmbeddingModel, ModelOutput
+
+logger = logging.getLogger("bottle_vision")
 
 
 def log_dict(stage: str, losses: LossComponents, total_loss: torch.Tensor) -> dict[str, torch.Tensor]:
@@ -79,6 +82,7 @@ class IllustMetricLearningModule(L.LightningModule):
         tag_embed_dim: int = 512,
         artist_embed_dim: int = 128,
         character_embed_dim: int = 128,
+        cls_token: bool = False,
         reg_tokens: int = 0,
         dropout: float = 0.1,
         # training
@@ -111,6 +115,7 @@ class IllustMetricLearningModule(L.LightningModule):
             tag_embed_dim=tag_embed_dim,
             artist_embed_dim=artist_embed_dim,
             character_embed_dim=character_embed_dim,
+            cls_token=cls_token,
             reg_tokens=reg_tokens,
             dropout=dropout,
             tag_temp=tag_contrastive_config["initial_temp"],
@@ -132,9 +137,11 @@ class IllustMetricLearningModule(L.LightningModule):
         self.val_metrics = self._create_metrics("val")
         # self.test_metrics = self._create_metrics("test")
 
+        self.partial_unfroze = False
+        self.full_unfroze = False
+
     def configure_model(self):
-        # self.model = torch.compile(self.model)
-        pass
+        self.model = torch.compile(self.model)
 
     def forward(self, x: torch.Tensor):
         return self.model(x)
@@ -183,6 +190,8 @@ class IllustMetricLearningModule(L.LightningModule):
 
         # Compute total loss
         total_loss = output.losses.weighted_sum(self.hparams.loss_weights)
+        if self.trainer.accumulate_grad_batches > 1:
+            total_loss /= self.trainer.accumulate_grad_batches
 
         # Log all metrics
         self.log_dict(log_dict("train", output.losses, total_loss))
@@ -300,21 +309,24 @@ class IllustMetricLearningModule(L.LightningModule):
 
         # 1. parameters except for backbone: start from 0
         other_lr_fn = partial(self.lr_fn, start_steps=0, warmup_steps=warmup_steps, total_steps=total_steps)
-        logging.info(f"Scheduling for other parameters: 0 -> {warmup_steps} -> {total_steps}")
+        logger.info(f"Scheduling for other parameters: 0 -> {warmup_steps} -> {total_steps}")
         # 2. backbone parameters: start from when backbone is partially unfrozen
         backbone_lr_fn = partial(
             self.lr_fn, start_steps=backbone_start_steps, warmup_steps=warmup_steps, total_steps=total_steps
         )
-        logging.info(
+        logger.info(
             f"Scheduling for backbone parameters: {backbone_start_steps} -> {backbone_start_steps + warmup_steps} -> {total_steps}"
         )
         scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, [other_lr_fn, backbone_lr_fn])
 
-        return [optimizer], [scheduler]
+        return {"optimizer": optimizer, "lr_scheduler": {"scheduler": scheduler, "interval": "step"}}
 
-    def on_train_epoch_start(self):
-        # Load pretrained weights
-        self.model.load_wd_tagger_weights(self.hparams.num_tags, self.hparams.num_artists)
+    def on_fit_start(self):
+        if self.trainer.ckpt_path is not None:
+            logger.info(f"Loaded checkpoint from {self.trainer.ckpt_path}")
+        else:
+            # Load pretrained weights
+            self.model.load_wd_tagger_weights(self.hparams.num_tags, self.hparams.num_characters)
         # Freeze loaded weights
         self.model.freeze_loaded_weights()
 
@@ -325,12 +337,18 @@ class IllustMetricLearningModule(L.LightningModule):
         partial_unfreeze_steps = int(total_steps * self.hparams.partial_unfreeze_percent)
         full_unfreeze_steps = int(total_steps * self.hparams.full_unfreeze_percent)
 
-        if current_step == partial_unfreeze_steps:
-            logging.info(f"Current step: {current_step}, unfreezing deeper layers")
+        if not self.partial_unfroze and current_step >= partial_unfreeze_steps:
+            logger.info(f"Current step: {current_step}, unfreezing deeper layers")
             self.model.unfreeze_deeper_layers(num_layers=self.hparams.partial_unfreeze_layers)
-        elif current_step == full_unfreeze_steps:
-            logging.info(f"Current step: {current_step}, unfreezing all layers")
+            self.partial_unfroze = True
+        elif not self.full_unfroze and current_step >= full_unfreeze_steps:
+            logger.info(f"Current step: {current_step}, unfreezing all layers")
             self.model.unfreeze_all()
+            self.full_unfroze = True
+
+        # WORKAROUND:
+        gc.collect()
+        torch.mps.empty_cache()
 
     # ===== Metric Logging =====
 
@@ -422,13 +440,14 @@ class IllustMetricLearningModule(L.LightningModule):
 
         log_freqs = log_freqs.cpu().numpy()
         ap_scores = ap_scores.cpu().numpy()
-        ax.scatter(log_freqs, ap_scores, alpha=0.5)
+        ax.scatter(log_freqs, ap_scores, alpha=0.5, s=10)
         ax.set_xlabel("Log Frequency")
         ax.set_ylabel("Average Precision")
         ax.set_title(title)
         ax.grid(True, alpha=0.3)
         ax.set_ylim(-0.02, 1.02)
 
+        fig.tight_layout()
         return fig
 
     def _plot_pr_curves_by_frequency(
@@ -475,6 +494,7 @@ class IllustMetricLearningModule(L.LightningModule):
         ax.set_xlim(-0.02, 1.02)
         ax.set_ylim(-0.02, 1.02)
 
+        fig.tight_layout()
         return fig
 
     def _log_batch_stats(self, batch_stat: BatchStat, prefix: str):

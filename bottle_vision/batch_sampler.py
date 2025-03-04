@@ -4,6 +4,8 @@ import math
 import numpy as np
 from torch.utils.data import BatchSampler
 
+logger = logging.getLogger("bottle_vision")
+
 
 class BalancedClassBatchSampler(BatchSampler):
     """Sample classes uniformly, while cycling through samples within each class.
@@ -21,7 +23,8 @@ class BalancedClassBatchSampler(BatchSampler):
         max_samples = math.floor(max_samples / samples_per_class) * samples_per_class
         self.max_samples = max_samples
         self.max_iter = len(indices_dict) // classes_per_batch * max_samples // samples_per_class
-        logging.info(f"{max_samples=}, {self.max_iter=}, {classes_per_batch=}, {samples_per_class=}")
+
+        logger.info(f"{max_samples=}, {self.max_iter=}, {classes_per_batch=}, {samples_per_class=}")
 
         # Build shuffled and cycled indices list for each class
         result = {}
@@ -52,7 +55,7 @@ class BalancedClassBatchSampler(BatchSampler):
                     label = classes[class_idx]
                     batch += self.indices[label][sample_offset : sample_offset + self.samples_per_class]
                     labels.append(label)
-                logging.debug(
+                logger.debug(
                     f"sample {sample_offset}-{sample_offset + self.samples_per_class}/{self.max_samples}, "
                     f"class {class_offset}-{class_offset + self.classes_per_batch}/{len(classes)}: "
                     f"{' '.join(labels)}"

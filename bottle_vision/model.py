@@ -1,5 +1,6 @@
 import logging
 from dataclasses import dataclass
+from typing import Optional
 
 import timm
 import torch
@@ -7,6 +8,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from .losses import ContrastiveLossParams, LossComponents, central_contrastive_loss
+
+logger = logging.getLogger("bottle_vision")
 
 
 @dataclass
@@ -60,6 +63,16 @@ class IllustEmbeddingModel(nn.Module):
         self.character_head = nn.Linear(self.hidden_dim, character_embed_dim)
         self.quality_head = nn.Linear(self.hidden_dim, 1)
         self.dropout = nn.Dropout(dropout)
+
+        # if tag and character heads are square, init as identity
+        if tag_embed_dim == self.hidden_dim:
+            self.tag_head.weight.data = torch.eye(self.hidden_dim)
+            self.tag_head.bias.data = torch.zeros(self.hidden_dim)
+            logger.info("Initialized tag head as identity")
+        if character_embed_dim == self.hidden_dim:
+            self.character_head.weight.data = torch.eye(self.hidden_dim)
+            self.character_head.bias.data = torch.zeros(self.hidden_dim)
+            logger.info("Initialized character head as identity")
 
         # Learnable prototypes
         self.tag_prototypes = nn.Parameter(torch.randn(num_tags, tag_embed_dim))
@@ -206,29 +219,33 @@ class IllustEmbeddingModel(nn.Module):
 
         raise ValueError(f"Unknown task: {task}")
 
-    def load_wd_tagger_weights(self, num_tags: int, num_artists: int):
+    def load_wd_tagger_weights(self, num_tags: int, num_characters: int):
         """Load weights from WD-Tagger pretrained model."""
         pretrained_model = timm.create_model("hf_hub:SmilingWolf/wd-vit-tagger-v3", pretrained=True)
+        # print("source parameters:", [n for n, _ in pretrained_model.named_parameters()])
+        # print("target parameters:", [n for n, _ in self.backbone.named_parameters()])
 
         # patch embedding
         self._copy_weights(self.backbone.patch_embed.proj, pretrained_model.patch_embed.proj)
-        logging.info(f"Loaded patch embedding weights: {self.backbone.patch_embed.proj.weight.shape}")
+        logger.info(f"Loaded patch embedding weights: {self.backbone.patch_embed.proj.weight.shape}")
 
         # positional embedding: ignore prefix tokens, only apply to the last num_patches tokens
         num_patches = self.backbone.patch_embed.num_patches
-        self.backbone.pos_embed.data[0, -num_patches:] = pretrained_model.pos_embed.data
-        logging.info(
+        self.backbone.pos_embed.data[:, -num_patches:] = pretrained_model.pos_embed.data.to(
+            self.backbone.pos_embed.device
+        )
+        logger.info(
             f"Loaded positional embedding weights: {pretrained_model.pos_embed.shape} -> {self.backbone.pos_embed.shape}"
         )
 
         # blocks
         for self_block, pretrained_block in zip(self.backbone.blocks, pretrained_model.blocks):
             self._copy_block_weights(self_block, pretrained_block)
-        logging.info(f"Loaded weights for {len(self.backbone.blocks)} transformer blocks")
+        logger.info(f"Loaded weights for {len(self.backbone.blocks)} transformer blocks")
 
         # norm
         self._copy_weights(self.backbone.norm, pretrained_model.norm)
-        logging.info(f"Loaded norm weights: {self.backbone.norm.weight.shape}")
+        logger.info(f"Loaded norm weights: {self.backbone.norm.weight.shape}")
 
         # head -> (current random head) -> tag and character prototypes
         if num_tags + num_characters == pretrained_model.num_classes:
@@ -248,10 +265,10 @@ class IllustEmbeddingModel(nn.Module):
     def _copy_weights(self, target: nn.Module, source: nn.Module):
         """Copy weights and biases from source to target."""
         assert target.weight.shape == source.weight.shape
-        target.weight.data = source.weight.data
+        target.weight.data = source.weight.data.to(target.weight.device)
         if hasattr(target, "bias") and target.bias is not None:
             assert target.bias.shape == source.bias.shape
-            target.bias.data = source.bias.data
+            target.bias.data = source.bias.data.to(target.bias.device)
 
     def _copy_block_weights(self, target_block: nn.Module, source_block: nn.Module):
         """Copy weights and biases for a transformer block."""
@@ -262,25 +279,28 @@ class IllustEmbeddingModel(nn.Module):
         self._copy_weights(target_block.norm1, source_block.norm1)
         self._copy_weights(target_block.norm2, source_block.norm2)
 
-    def freeze_loaded_weights(self):
+    def freeze_loaded_weights(self, freeze_pos_embed: bool = True):
         """Freeze all weights that have been loaded in the load_wd_tagger_weights function."""
         # Freeze patch embedding weights
         self.backbone.patch_embed.proj.weight.requires_grad = False
         self.backbone.patch_embed.proj.bias.requires_grad = False
-        logging.info("Frozen patch embedding weights")
+        logger.info("Froze patch embedding weights")
 
-        # No way to freeze partial positional embedding weights
+        # Freeze positional embedding weights
+        if freeze_pos_embed:
+            self.backbone.pos_embed.requires_grad = False
+            logger.info("Froze positional embedding weights")
 
         # Freeze weights for each transformer block
         for block in self.backbone.blocks:
             for param in block.parameters():
                 param.requires_grad = False
-        logging.info(f"Froze weights for {len(self.backbone.blocks)} transformer blocks")
+        logger.info(f"Froze weights for {len(self.backbone.blocks)} transformer blocks")
 
         # Freeze norm weights
         self.backbone.norm.weight.requires_grad = False
         self.backbone.norm.bias.requires_grad = False
-        logging.info("Frozen norm weights")
+        logger.info("Froze norm weights")
 
         # No need to freeze tag and artist prototypes, since heads are learnable
 
@@ -289,10 +309,15 @@ class IllustEmbeddingModel(nn.Module):
         for block in self.backbone.blocks[-num_layers:]:
             for param in block.parameters():
                 param.requires_grad = True
-        logging.info(f"Unfroze the last {num_layers} transformer blocks")
+        logger.info(f"Unfroze the last {num_layers} transformer blocks")
+
+        # Unfreeze norm weights
+        self.backbone.norm.weight.requires_grad = True
+        self.backbone.norm.bias.requires_grad = True
+        logger.info("Unfroze norm weights")
 
     def unfreeze_all(self):
         """Unfreeze all parameters."""
         for param in self.parameters():
             param.requires_grad = True
-        logging.info("Unfroze all parameters")
+        logger.info("Unfroze all parameters")
