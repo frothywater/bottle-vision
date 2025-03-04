@@ -16,7 +16,11 @@ class IllustDatasetItem:
     tag_label: torch.Tensor
     artist_label: torch.Tensor
     character_label: torch.Tensor
+    tag_mask: torch.Tensor
+    artist_mask: torch.Tensor
+    character_mask: torch.Tensor
     score: torch.Tensor
+    filename: str
 
 
 class IllustDataset(Dataset):
@@ -89,14 +93,20 @@ class IllustDataset(Dataset):
         tag_label = torch.full((self.num_tags,), eps / (self.num_tags - len(tags)), dtype=torch.float32)
         for tag in tags:
             tag_label[tag] = 1.0 - eps / len(tags)
+        if len(tags) > 0:
+            tag_mask = torch.tensor(True, dtype=torch.bool)
+        else:
+            tag_mask = torch.tensor(False, dtype=torch.bool)
 
         # Artist one-hot vector with label smoothing
         artist = row["artist"][0].as_py()
+        artist_label = torch.full((self.num_artists,), eps / (self.num_artists - 1), dtype=torch.float32)
         if artist is not None:
-            artist_label = torch.full((self.num_artists,), eps / (self.num_artists - 1), dtype=torch.float32)
             artist_label[artist] = 1.0 - eps
+            artist_mask = torch.tensor(True, dtype=torch.bool)
         else:
             artist_label = torch.zeros((self.num_artists,), dtype=torch.float32)
+            artist_mask = torch.tensor(False, dtype=torch.bool)
 
         # Character multi-hot vector with label smoothing
         characters = row["characters"][0].as_py()
@@ -105,6 +115,10 @@ class IllustDataset(Dataset):
         )
         for character in characters:
             character_label[character] = 1.0 - eps / len(characters)
+        if len(characters) > 0:
+            character_mask = torch.tensor(True, dtype=torch.bool)
+        else:
+            character_mask = torch.tensor(False, dtype=torch.bool)
 
         # Quality score
         score = row["score"][0].as_py()
@@ -115,5 +129,9 @@ class IllustDataset(Dataset):
             tag_label=tag_label,
             artist_label=artist_label,
             character_label=character_label,
+            tag_mask=tag_mask,
+            artist_mask=artist_mask,
+            character_mask=character_mask,
             score=score,
+            filename=row["filename"][0].as_py(),
         )

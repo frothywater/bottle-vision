@@ -88,6 +88,7 @@ class IllustEmbeddingModel(nn.Module):
         score: torch.Tensor,
         task: str,
         contrastive_params: ContrastiveLossParams,
+        masks: Optional[torch.Tensor] = None,
     ) -> ModelOutput:
         """Forward pass for a specific task."""
         # Get backbone features
@@ -99,6 +100,7 @@ class IllustEmbeddingModel(nn.Module):
             labels=labels,
             task=task,
             contrastive_params=contrastive_params,
+            masks=masks,
         )
 
         # Compute quality loss
@@ -117,6 +119,7 @@ class IllustEmbeddingModel(nn.Module):
         labels: torch.Tensor,
         task: str,
         contrastive_params: ContrastiveLossParams,
+        masks: Optional[torch.Tensor] = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Compute similarities and loss for a specific task."""
         # Select appropriate head and prototypes based on task
@@ -145,6 +148,7 @@ class IllustEmbeddingModel(nn.Module):
             labels=labels,
             temp=temp,
             params=contrastive_params,
+            mask=masks,
         )
 
         return torch.sigmoid(similarities), loss
@@ -155,6 +159,7 @@ class IllustEmbeddingModel(nn.Module):
         labels: dict[str, torch.Tensor],
         score: torch.Tensor,
         contrastive_params: dict[str, ContrastiveLossParams],
+        masks: dict[str, torch.Tensor] = {},
     ) -> ModelOutput:
         """Forward pass for all tasks, used in validation/test."""
         # Get backbone features
@@ -169,6 +174,7 @@ class IllustEmbeddingModel(nn.Module):
                 labels=labels,
                 task=task,
                 contrastive_params=contrastive_params[task],
+                masks=masks.get(task),
             )
             sim_preds[task] = task_sim_preds
             losses.__setattr__(task, task_loss)

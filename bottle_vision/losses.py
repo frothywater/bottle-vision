@@ -56,6 +56,7 @@ def central_contrastive_loss(
     params: ContrastiveLossParams,
     eps: float = 1e-6,
     max_exp_value: float = 30.0,
+    mask: torch.Tensor = None,
 ) -> torch.Tensor:
     """Central contrastive loss adapted for multi-label supervised case with class weights.
 
@@ -65,12 +66,10 @@ def central_contrastive_loss(
         temp: Temperature parameter
         params: Contrastive loss parameters
         eps: Small value to avoid numerical instability
+        mask: Bool mask for positive labels of shape (N,)
 
     Returns:
         Loss value as a scalar tensor
-
-    Note:
-        - Make sure each sample has at least one positive label.
 
     References:
         - [Center Contrastive Loss for Metric Learning](https://arxiv.org/abs/2308.00458)
@@ -80,6 +79,14 @@ def central_contrastive_loss(
     Note:
         Too small eps (1e-8) for fp16 training may cause NaN loss values.
     """
+    if mask is not None:
+        # mask out samples with no positive labels
+        # if all labels are negative, return zero loss
+        if not mask.any():
+            return torch.tensor(0.0, device=sim.device)
+        sim = sim[mask]
+        labels = labels[mask]
+
     # compute a per-sample shift to improve stability (log-sum-exp trick)
     sim_div = sim / temp
     shift = sim_div.max(dim=1, keepdim=True).values

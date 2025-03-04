@@ -176,6 +176,7 @@ class IllustMetricLearningModule(L.LightningModule):
             x=batch.data.image,
             task=task,
             labels=batch.data.__getattribute__(f"{batch.task}_label"),
+            masks=batch.data.__getattribute__(f"{batch.task}_mask"),
             score=batch.data.score,
             contrastive_params=params,
         )
@@ -194,6 +195,7 @@ class IllustMetricLearningModule(L.LightningModule):
 
     def validation_step(self, batch: IllustDatasetItem, batch_idx: int):
         labels = dict(tag=batch.tag_label, artist=batch.artist_label, character=batch.character_label)
+        masks = dict(tag=batch.tag_mask, artist=batch.artist_mask, character=batch.character_mask)
         tag_params = ContrastiveLossParams.from_config(self.hparams.tag_contrastive_config)
         artist_params = ContrastiveLossParams.from_config(self.hparams.artist_contrastive_config)
         character_params = ContrastiveLossParams.from_config(self.hparams.character_contrastive_config)
@@ -203,6 +205,7 @@ class IllustMetricLearningModule(L.LightningModule):
         output: ModelOutput = self.model.forward_all_tasks(
             x=batch.image,
             labels=labels,
+            masks=masks,
             score=batch.score,
             contrastive_params=params,
         )
@@ -211,19 +214,21 @@ class IllustMetricLearningModule(L.LightningModule):
         total_loss = output.losses.weighted_sum(self.hparams.loss_weights)
 
         # Log all metrics
-        self.log_dict(log_dict("valid", output.losses, total_loss))
+        self.log_dict(log_dict("val", output.losses, total_loss))
 
         # Update metrics for the task
         for task, sim_preds in output.sim_preds.items():
-            # Convert float to long (due to label smoothing)
-            label = labels[task].round().long()
-            # Remove the samples with no labels
-            mask = label.sum(dim=1) > 0
+            mask = masks[task]
+            if mask.sum() == 0:
+                continue
             sim_preds = sim_preds[mask]
-            label = label[mask]
+            # Convert float to long (due to label smoothing)
+            label = labels[task][mask].round().long()
+
             # Take indices along class axis if doing artist task (multiclass)
             if task == "artist":
                 label = label.argmax(dim=1)
+
             self.val_metrics[task].update(sim_preds, label)
 
         return total_loss
