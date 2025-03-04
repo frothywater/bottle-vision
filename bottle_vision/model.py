@@ -63,8 +63,8 @@ class IllustEmbeddingModel(nn.Module):
 
         # Learnable prototypes
         self.tag_prototypes = nn.Parameter(torch.randn(num_tags, tag_embed_dim))
-        self.artist_prototypes = nn.Parameter(torch.randn(num_artists, artist_embed_dim))
         self.character_prototypes = nn.Parameter(torch.randn(num_characters, character_embed_dim))
+        self.artist_prototypes = nn.Parameter(torch.randn(num_artists, artist_embed_dim))
         nn.init.xavier_normal_(self.tag_prototypes)
         nn.init.xavier_normal_(self.artist_prototypes)
         nn.init.xavier_normal_(self.character_prototypes)
@@ -224,17 +224,20 @@ class IllustEmbeddingModel(nn.Module):
         self._copy_weights(self.backbone.norm, pretrained_model.norm)
         logging.info(f"Loaded norm weights: {self.backbone.norm.weight.shape}")
 
-        # head -> (current random head) -> tag and artist prototypes
-        if num_tags + num_artists == pretrained_model.num_classes:
+        # head -> (current random head) -> tag and character prototypes
+        if num_tags + num_characters == pretrained_model.num_classes:
             # extract embeddings from pretrained head
-            pretrained_tag_embeddings = pretrained_model.head.weight[:num_tags]
-            pretrained_artist_embeddings = pretrained_model.head.weight[num_tags:]
+            pretrained_tag_embeddings = pretrained_model.head.weight[:num_tags].to(self.tag_head.weight.device)
+            pretrained_character_embeddings = pretrained_model.head.weight[num_tags:].to(
+                self.character_head.weight.device
+            )
 
-            # project embeddings to tag and artist prototypes
+            # project embeddings to tag and character prototypes
+            # (num_classes, hidden_dim) @ (class_dim, hidden_dim).T -> (num_classes, class_dim)
             self.tag_prototypes.data = pretrained_tag_embeddings @ self.tag_head.weight.T
-            self.artist_prototypes.data = pretrained_artist_embeddings @ self.artist_head.weight.T
-            logging.info(f"Loaded tag prototypes from head: {self.tag_prototypes.shape}")
-            logging.info(f"Loaded artist prototypes from head: {self.artist_prototypes.shape}")
+            self.character_prototypes.data = pretrained_character_embeddings @ self.character_head.weight.T
+            logger.info(f"Loaded tag prototypes from head: {self.tag_prototypes.shape}")
+            logger.info(f"Loaded character prototypes from head: {self.character_prototypes.shape}")
 
     def _copy_weights(self, target: nn.Module, source: nn.Module):
         """Copy weights and biases from source to target."""
