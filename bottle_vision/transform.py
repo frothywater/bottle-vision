@@ -16,9 +16,11 @@ class PadSquare(T.Transform):
         if h == w:
             return x
         size = max(h, w)
-        pad_h = (size - h) // 2
-        pad_w = (size - w) // 2
-        return T.functional.pad(x, (pad_w, pad_h), fill=self.fill)
+        pad_top = (size - h) // 2
+        pad_bottom = size - h - pad_top
+        pad_left = (size - w) // 2
+        pad_right = size - w - pad_left
+        return T.functional.pad(x, (pad_left, pad_top, pad_right, pad_bottom), fill=self.fill)
 
 
 class CustomRandomCrop(T.Transform):
