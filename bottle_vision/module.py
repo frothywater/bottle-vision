@@ -141,6 +141,7 @@ class IllustMetricLearningModule(L.LightningModule):
 
     def configure_model(self):
         self.model = torch.compile(self.model)
+        torch.set_float32_matmul_precision("high")
 
     def forward(self, x: torch.Tensor):
         return self.model(x)

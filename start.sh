@@ -2,7 +2,9 @@
 set -e
 
 echo "Activating conda environment..."
-conda activate torch
+conda init
+source ~/.bashrc
+conda activate base
 
 echo "Installing pip packages from repo requirements.txt..."
 pip install -r requirements.txt
@@ -11,8 +13,10 @@ echo "Downloading dataset..."
 # Run the dataset download script
 python script/download_dataset.py /workspace danbooru2023/
 
+
 echo "Starting checkpoint monitor..."
 # Start the checkpoint monitor in the background
+mkdir -p /volume/exp
 python script/checkpoint_monitor.py /volume/exp &
 MONITOR_PID=$!
 

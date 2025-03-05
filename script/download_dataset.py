@@ -47,11 +47,12 @@ def download_dataset(local_dir: str, dataset_dir: str):
         dest_pathname = os.path.join(local_dir, d)
         if not os.path.exists(os.path.dirname(dest_pathname)):
             os.makedirs(os.path.dirname(dest_pathname))
-    for k in keys:
+    for i, k in enumerate(keys):
         dest_pathname = os.path.join(local_dir, k)
         if not os.path.exists(os.path.dirname(dest_pathname)):
             os.makedirs(os.path.dirname(dest_pathname))
         s3.download_file(s3_bucket, k, dest_pathname)
+        print(f"[{i + 1}/{len(keys)}] Downloaded {k} to {dest_pathname}")
 
 
 if __name__ == "__main__":

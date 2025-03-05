@@ -72,27 +72,23 @@ model:
   partial_unfreeze_percent: 0.33
   full_unfreeze_percent: 0.66
   partial_unfreeze_layers: 4
-  tag_dict_path: ../danbooru2023/export/train/tag_indices_full.json
-  artist_dict_path: ../danbooru2023/export/train/artist_indices.json
-  character_dict_path: ../danbooru2023/export/train/character_indices_full.json
+  tag_dict_path: ../danbooru2023/train/tag_indices_full.json
+  artist_dict_path: ../danbooru2023/train/artist_indices.json
+  character_dict_path: ../danbooru2023/train/character_indices_full.json
 
 data:
   num_tags: 8110
   num_artists: 1024
   num_characters: 2751
-  classes_per_batch: 4
-  samples_per_class: 2
+  classes_per_batch: 16
+  samples_per_class: 8
   num_workers: 0
   image_size: 448
   label_smoothing_eps: 0.1
-  task_probs:
-    tag: 0.4
-    artist: 0.4
-    character: 0.2
-  train_parquet_path: ../danbooru2023/export/train/images.parquet
-  train_tar_dir: ../danbooru2023/export/train
-  valid_parquet_path: ../danbooru2023/export/valid/images.parquet
-  valid_tar_dir: ../danbooru2023/export/valid
-  train_tag_dict_path: ../danbooru2023/export/train/tag_indices.json
-  train_artist_dict_path: ../danbooru2023/export/train/artist_indices.json
-  train_character_dict_path: ../danbooru2023/export/train/character_indices.json
+  train_parquet_path: ../danbooru2023/train/images.parquet
+  train_tar_dir: ../danbooru2023/train
+  valid_parquet_path: ../danbooru2023/valid/images.parquet
+  valid_tar_dir: ../danbooru2023/valid
+  train_tag_dict_path: ../danbooru2023/train/tag_indices.json
+  train_artist_dict_path: ../danbooru2023/train/artist_indices.json
+  train_character_dict_path: ../danbooru2023/train/character_indices.json
