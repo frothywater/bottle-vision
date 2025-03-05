@@ -229,4 +229,4 @@ pyrightconfig.json
 
 data/
 exp/
-test.ipynb
+test/
