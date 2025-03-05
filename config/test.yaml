@@ -1,30 +1,30 @@
 seed_everything: 42
 trainer:
-  accelerator: mps
-  # accelerator: auto
-  # devices: 1
+  # accelerator: mps
+  accelerator: auto
+  devices: 1
   # precision: bf16-mixed # Enable mixed precision training
   precision: 32
   gradient_clip_val: 1.0
-  accumulate_grad_batches: 3 # Critical for sequential multi-task training
-  max_steps: 30000
+  # accumulate_grad_batches: 3 # Critical for sequential multi-task training
+  max_steps: 15000
   val_check_interval: 1500 # batches
-  default_root_dir: exp
+  default_root_dir: /volume/exp
   log_every_n_steps: 1
-  limit_val_batches: 300
-  # enable_progress_bar: false
   # fast_dev_run: 3
   # num_sanity_val_steps: 3
+  limit_val_batches: 1000
+  enable_progress_bar: false
   # profiler:
   #   class_path: lightning.pytorch.profilers.PyTorchProfiler
   callbacks:
     - class_path: lightning.pytorch.callbacks.ModelCheckpoint
       init_args:
-        filename: epoch{epoch:02d}-val_loss={val/loss/total:.2f}
-        save_top_k: 3
-        save_last: link
-        monitor: val/loss/total
+        filename: step{step}-val_loss={val/loss/total:.2f}
         mode: min
+        save_top_k: 3
+        monitor: val/loss/total
+        every_n_train_steps: 1500
         auto_insert_metric_name: false
     - class_path: lightning.pytorch.callbacks.ModelSummary
       init_args:
@@ -68,9 +68,9 @@ model:
   backbone_lr: 3e-5
   lr_start_ratio: 0.1
   lr_end_ratio: 0.1
-  warmup_percent: 0.05
-  partial_unfreeze_percent: 0.15
-  full_unfreeze_percent: 0.50
+  warmup_percent: 0.1
+  partial_unfreeze_percent: 0.33
+  full_unfreeze_percent: 0.66
   partial_unfreeze_layers: 4
   tag_dict_path: ../danbooru2023/export/train/tag_indices_full.json
   artist_dict_path: ../danbooru2023/export/train/artist_indices.json
@@ -85,6 +85,10 @@ data:
   num_workers: 0
   image_size: 448
   label_smoothing_eps: 0.1
+  task_probs:
+    tag: 0.4
+    artist: 0.4
+    character: 0.2
   train_parquet_path: ../danbooru2023/export/train/images.parquet
   train_tar_dir: ../danbooru2023/export/train
   valid_parquet_path: ../danbooru2023/export/valid/images.parquet
