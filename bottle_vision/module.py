@@ -1,4 +1,3 @@
-import gc
 import json
 import logging
 import time
@@ -345,10 +344,6 @@ class IllustMetricLearningModule(L.LightningModule):
             logger.info(f"Current step: {current_step}, unfreezing all layers")
             self.model.unfreeze_all()
             self.full_unfroze = True
-
-        # WORKAROUND:
-        gc.collect()
-        torch.mps.empty_cache()
 
     # ===== Metric Logging =====
 

@@ -32,6 +32,7 @@ class IllustDataModule(L.LightningDataModule):
         label_smoothing_eps: float = 0,
         mean: list[float] = [0.5, 0.5, 0.5],
         std: list[float] = [0.5, 0.5, 0.5],
+        task_probs: Optional[dict[str, float]] = None,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -123,7 +124,9 @@ class IllustDataModule(L.LightningDataModule):
         )
 
         # Return interleaved dataloader for 3 tasks
-        return InterleavedDataLoader({"tag": tag_loader, "character": character_loader, "artist": artist_loader})
+        return InterleavedDataLoader(
+            {"tag": tag_loader, "character": character_loader, "artist": artist_loader}, probs=self.hparams.task_probs
+        )
 
     def val_dataloader(self):
         if not (self.hparams.valid_parquet_path and self.hparams.valid_tar_dir):
