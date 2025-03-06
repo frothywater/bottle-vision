@@ -1,11 +1,6 @@
 #!/bin/bash
 set -e
 
-echo "Activating conda environment..."
-conda init
-source ~/.bashrc
-conda activate base
-
 echo "Installing pip packages from repo requirements.txt..."
 pip install -r requirements.txt
 

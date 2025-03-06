@@ -50,8 +50,8 @@ model:
     tag: 1.0
     artist: 1.0
     character: 1.0
-    quality: 1.0
-    ortho: 1.0
+    quality: 0.2
+    ortho: 0.5
   tag_contrastive_config:
     initial_temp: 0.05
     margin: 0.2
@@ -80,9 +80,9 @@ data:
   num_tags: 8110
   num_artists: 1024
   num_characters: 2751
-  classes_per_batch: 16
-  samples_per_class: 8
-  num_workers: 0
+  classes_per_batch: 8
+  samples_per_class: 4
+  num_workers: 4
   image_size: 448
   label_smoothing_eps: 0.1
   train_parquet_path: ../danbooru2023/train/images.parquet

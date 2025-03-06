@@ -106,21 +106,18 @@ class IllustDataModule(L.LightningDataModule):
             batch_sampler=tag_sampler,
             num_workers=self.hparams.num_workers,
             collate_fn=self._collate_fn,
-            multiprocessing_context="fork" if self.hparams.num_workers > 0 else None,
         )
         artist_loader = DataLoader(
             style_dataset,
             batch_sampler=artist_sampler,
             num_workers=self.hparams.num_workers,
             collate_fn=self._collate_fn,
-            multiprocessing_context="fork" if self.hparams.num_workers > 0 else None,
         )
         character_loader = DataLoader(
             content_dataset,
             batch_sampler=character_sampler,
             num_workers=self.hparams.num_workers,
             collate_fn=self._collate_fn,
-            multiprocessing_context="fork" if self.hparams.num_workers > 0 else None,
         )
 
         # Return interleaved dataloader for 3 tasks
@@ -148,6 +145,5 @@ class IllustDataModule(L.LightningDataModule):
             batch_size=self.hparams.classes_per_batch * self.hparams.samples_per_class,
             num_workers=self.hparams.num_workers,
             collate_fn=self._collate_fn,
-            multiprocessing_context="fork" if self.hparams.num_workers > 0 else None,
         )
         return dataloader

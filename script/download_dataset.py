@@ -1,4 +1,5 @@
 import os
+import time
 from argparse import ArgumentParser
 
 import boto3
@@ -51,8 +52,13 @@ def download_dataset(local_dir: str, dataset_dir: str):
         dest_pathname = os.path.join(local_dir, k)
         if not os.path.exists(os.path.dirname(dest_pathname)):
             os.makedirs(os.path.dirname(dest_pathname))
+
+        start = time.time()
         s3.download_file(s3_bucket, k, dest_pathname)
-        print(f"[{i + 1}/{len(keys)}] Downloaded {k} to {dest_pathname}")
+        elapsed = time.time() - start
+        speed_mbps = os.path.getsize(dest_pathname) / elapsed / 1024 / 1024
+
+        print(f"[{i + 1}/{len(keys)}] Downloaded {k} to {dest_pathname}, {speed_mbps:.2f} MB/s")
 
 
 if __name__ == "__main__":
