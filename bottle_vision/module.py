@@ -174,9 +174,6 @@ class IllustMetricLearningModule(L.LightningModule):
         return bin_masks
 
     def training_step(self, batch: InterleavedDataItem, batch_idx: int):
-        # Track batch timing
-        batch_stat = BatchStat(batch_size=len(batch.data.image), start_time=time.time())
-
         task = batch.task
         params = ContrastiveLossParams.from_config(self.hparams[f"{task}_contrastive_config"])
         output: ModelOutput = self.model.forward_task(
@@ -195,10 +192,6 @@ class IllustMetricLearningModule(L.LightningModule):
 
         # Log all metrics
         self.log_dict(log_dict("train", output.losses, total_loss))
-
-        # Complete timing and log stats
-        batch_stat.complete()
-        self._log_batch_stats(batch_stat, prefix="train")
 
         return total_loss
 
@@ -330,6 +323,9 @@ class IllustMetricLearningModule(L.LightningModule):
         # Freeze loaded weights
         self.model.freeze_loaded_weights()
 
+    def on_train_batch_start(self, batch, batch_idx):
+        self.batch_stat = BatchStat(batch_size=len(batch.data.image), start_time=time.time())
+
     def on_train_batch_end(self, outputs, batch, batch_idx):
         # Unfreeze deeper layers progressively
         total_steps = self.trainer.estimated_stepping_batches
@@ -345,6 +341,10 @@ class IllustMetricLearningModule(L.LightningModule):
             logger.info(f"Current step: {current_step}, unfreezing all layers")
             self.model.unfreeze_all()
             self.full_unfroze = True
+
+        if hasattr(self, "batch_stat"):
+            self.batch_stat.complete()
+            self._log_batch_stats(self.batch_stat, prefix="train")
 
     # ===== Metric Logging =====
 
