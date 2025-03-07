@@ -1,5 +1,6 @@
 from collections.abc import Iterator
 from dataclasses import dataclass
+import math
 
 import numpy as np
 from torch.utils.data import DataLoader
@@ -28,20 +29,24 @@ class InterleavedDataLoader(Iterator):
 
     def __init__(self, loaders: dict[str, DataLoader], probs: dict[str, float] = None):
         self.loaders = loaders
-        self.max_len = max(len(loader) for loader in loaders.values())
-        if probs is not None:
-            probs = {key: prob / sum(probs.values()) for key, prob in probs.items()}
-            self.total_batches = max(int(len(loader) / probs[key]) for key, loader in loaders.items())
-        else:
-            self.total_batches = self.max_len * len(self.loaders)
-        self.probs = probs
 
-        self.iterators = {}
-        for key, loader in self.loaders.items():
-            if len(loader) < self.max_len:
-                self.iterators[key] = cycling_iterator(loader)
-            else:
-                self.iterators[key] = iter(loader)
+        if probs is not None:
+            self.probs = {key: prob / sum(probs.values()) for key, prob in probs.items()}
+            self.total_batches = max(math.ceil(len(loader) / probs[key]) for key, loader in loaders.items())
+
+            # Prepare shuffled key index list
+            key_indices = []
+            for i, key in enumerate(loaders.keys()):
+                key_indices += [i] * math.ceil(self.total_batches * self.probs[key])
+            assert len(key_indices) >= self.total_batches
+            np.random.shuffle(key_indices)
+            self.key_indices = key_indices
+        else:
+            max_len = max(len(loader) for loader in loaders.values())
+            self.total_batches = max_len * len(self.loaders)
+            self.probs = None
+
+        self.iterators = {key: cycling_iterator(loader) for key, loader in self.loaders.items()}
 
         self.current_batch = 0
         self.keys = list(self.loaders.keys())
@@ -54,7 +59,7 @@ class InterleavedDataLoader(Iterator):
             raise StopIteration
 
         if self.probs is not None:
-            key = np.random.choice(self.keys, p=[self.probs[key] for key in self.keys])
+            key = self.keys[self.key_indices[self.current_batch]]
         else:
             key = self.keys[self.current_batch % len(self.keys)]
         self.current_batch += 1
