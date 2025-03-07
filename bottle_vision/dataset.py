@@ -56,6 +56,9 @@ class IllustDataset(Dataset):
         self.num_characters = num_characters
         self.label_smoothing_eps = label_smoothing_eps
 
+        # Initialize a cache for opened tar files.
+        self.tar_file_cache = {}
+
     def process_image(self, img: Image.Image) -> Image.Image:
         # Convert to RGB or RGBA
         if img.mode not in ["RGB", "RGBA"]:
@@ -78,10 +81,16 @@ class IllustDataset(Dataset):
         offset = row["offset"][0].as_py()
         filesize = row["size"][0].as_py()
         tar_path = os.path.join(self.tar_dir, tar_filename)
-        with open(tar_path, "rb") as f:
-            f.seek(offset)
-            data = f.read(filesize)
-            image = Image.open(BytesIO(data))
+
+        # Check cache; if not opened, open and store the file handle.
+        if tar_filename not in self.tar_file_cache:
+            self.tar_file_cache[tar_filename] = open(tar_path, "rb")
+
+        f = self.tar_file_cache[tar_filename]
+        f.seek(offset)
+        data = f.read(filesize)
+        image = Image.open(BytesIO(data))
+        image.load()
 
         image = self.process_image(image)
         if self.transform is not None:
@@ -135,3 +144,11 @@ class IllustDataset(Dataset):
             score=score,
             filename=row["filename"][0].as_py(),
         )
+
+    def __del__(self):
+        # Ensure all file handles are closed when the dataset is destroyed.
+        for f in self.tar_file_cache.values():
+            try:
+                f.close()
+            except Exception:
+                pass

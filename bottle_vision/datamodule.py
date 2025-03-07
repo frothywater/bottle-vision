@@ -26,6 +26,7 @@ class IllustDataModule(L.LightningDataModule):
         num_artists: int,
         num_characters: int,
         num_workers: int = 4,
+        prefetch_factor: int = 2,
         image_size: int = 448,
         valid_parquet_path: Optional[str] = None,
         valid_tar_dir: Optional[str] = None,
@@ -109,18 +110,21 @@ class IllustDataModule(L.LightningDataModule):
             content_dataset,
             batch_sampler=tag_sampler,
             num_workers=self.hparams.num_workers,
+            prefetch_factor=self.hparams.prefetch_factor,
             collate_fn=self._collate_fn,
         )
         artist_loader = DataLoader(
             style_dataset,
             batch_sampler=artist_sampler,
             num_workers=self.hparams.num_workers,
+            prefetch_factor=self.hparams.prefetch_factor,
             collate_fn=self._collate_fn,
         )
         character_loader = DataLoader(
             content_dataset,
             batch_sampler=character_sampler,
             num_workers=self.hparams.num_workers,
+            prefetch_factor=self.hparams.prefetch_factor,
             collate_fn=self._collate_fn,
         )
 
@@ -148,6 +152,7 @@ class IllustDataModule(L.LightningDataModule):
             dataset,
             batch_size=self.hparams.classes_per_batch * self.hparams.samples_per_class,
             num_workers=self.hparams.num_workers,
+            prefetch_factor=self.hparams.prefetch_factor,
             collate_fn=self._collate_fn,
         )
         return dataloader

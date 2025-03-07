@@ -83,6 +83,7 @@ data:
   classes_per_batch: 16
   samples_per_class: 4
   num_workers: 8
+  prefetch_factor: 8
   image_size: 448
   label_smoothing_eps: 0.1
   task_probs:
