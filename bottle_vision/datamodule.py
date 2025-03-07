@@ -33,6 +33,7 @@ class IllustDataModule(L.LightningDataModule):
         mean: list[float] = [0.5, 0.5, 0.5],
         std: list[float] = [0.5, 0.5, 0.5],
         task_probs: Optional[dict[str, float]] = None,
+        sample_cutoff: Optional[int] = None,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -88,16 +89,19 @@ class IllustDataModule(L.LightningDataModule):
             indices_dict=tag_dict,
             classes_per_batch=self.hparams.classes_per_batch,
             samples_per_class=self.hparams.samples_per_class,
+            sample_cutoff=self.hparams.sample_cutoff,
         )
         artist_sampler = BalancedClassBatchSampler(
             indices_dict=artist_dict,
             classes_per_batch=self.hparams.classes_per_batch,
             samples_per_class=self.hparams.samples_per_class,
+            sample_cutoff=self.hparams.sample_cutoff,
         )
         character_sampler = BalancedClassBatchSampler(
             indices_dict=character_dict,
             classes_per_batch=self.hparams.classes_per_batch,
             samples_per_class=self.hparams.samples_per_class,
+            sample_cutoff=self.hparams.sample_cutoff,
         )
 
         # DataLoader

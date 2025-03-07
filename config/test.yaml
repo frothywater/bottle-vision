@@ -3,8 +3,8 @@ trainer:
   # accelerator: mps
   accelerator: auto
   devices: 1
-  # precision: bf16-mixed # Enable mixed precision training
-  precision: 32
+  precision: bf16-mixed # Enable mixed precision training
+  # precision: 32
   gradient_clip_val: 1.0
   # accumulate_grad_batches: 3 # Critical for sequential multi-task training
   max_steps: 15000
@@ -14,7 +14,7 @@ trainer:
   # fast_dev_run: 3
   # num_sanity_val_steps: 3
   # limit_val_batches: 1000
-  enable_progress_bar: false
+  # enable_progress_bar: false
   # profiler:
   #   class_path: lightning.pytorch.profilers.PyTorchProfiler
   callbacks:
@@ -80,15 +80,16 @@ data:
   num_tags: 8110
   num_artists: 1024
   num_characters: 2751
-  classes_per_batch: 8
+  classes_per_batch: 16
   samples_per_class: 4
-  num_workers: 4
+  num_workers: 8
   image_size: 448
   label_smoothing_eps: 0.1
   task_probs:
     tag: 0.5
     artist: 0.3
     character: 0.2
+  sample_cutoff: 24
   train_parquet_path: ../danbooru2023/train/images.parquet
   train_tar_dir: ../danbooru2023/train
   valid_parquet_path: ../danbooru2023/valid/images.parquet
