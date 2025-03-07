@@ -51,7 +51,8 @@ class BalancedClassBatchSampler(BatchSampler):
             for class_offset in range(0, len(classes), self.classes_per_batch):
                 batch = []
                 labels = []
-                for class_idx in range(class_offset, class_offset + self.classes_per_batch):
+                class_idx_end = min(class_offset + self.classes_per_batch, len(classes))
+                for class_idx in range(class_offset, class_idx_end):
                     label = classes[class_idx]
                     batch += self.indices[label][sample_offset : sample_offset + self.samples_per_class]
                     labels.append(label)
