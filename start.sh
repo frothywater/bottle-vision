@@ -6,18 +6,24 @@ pip install -r requirements.txt
 
 echo "Downloading dataset..."
 # Run the dataset download script
-python script/download_dataset.py /workspace danbooru2023/
+if [ -z "$DATASET_DIR" ]; then
+    DATASET_DIR=$(realpath ..)
+fi
+python script/download_dataset.py $DATASET_DIR danbooru2023/
 
 
 echo "Starting checkpoint monitor..."
 # Start the checkpoint monitor in the background
-mkdir -p /volume/exp
-python script/checkpoint_monitor.py /volume/exp &
+if [ -z "$EXP_DIR" ]; then
+    EXP_DIR=exp
+fi
+mkdir -p $EXP_DIR
+python script/checkpoint_monitor.py $EXP_DIR &
 MONITOR_PID=$!
 
 echo "Starting TensorBoard..."
 # Start TensorBoard (adjust --logdir if needed, here assumed to be repo/logs)
-tensorboard --logdir=/volume/exp --host=0.0.0.0 --port=6006 &
+tensorboard --logdir=$EXP_DIR --host=0.0.0.0 --port=6006 &
 TB_PID=$!
 
 echo "Starting training..."
