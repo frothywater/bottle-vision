@@ -35,30 +35,6 @@ def log_dict(stage: str, losses: LossComponents, total_loss: torch.Tensor) -> di
     return result
 
 
-@dataclass
-class BatchStat:
-    """Track batch-level statistics."""
-
-    batch_size: int
-    start_time: float
-    end_time: Optional[float] = None
-
-    def complete(self):
-        self.end_time = time.time()
-
-    @property
-    def duration(self) -> float:
-        if self.end_time is None:
-            return 0.0
-        return self.end_time - self.start_time
-
-    @property
-    def samples_per_second(self) -> float:
-        if self.duration == 0:
-            return 0.0
-        return self.batch_size / self.duration
-
-
 class IllustMetricLearningModule(L.LightningModule):
     """Multi-task metric learning model for illustrations.
 
@@ -179,8 +155,8 @@ class IllustMetricLearningModule(L.LightningModule):
         output: ModelOutput = self.model.forward_task(
             x=batch.data.image,
             task=task,
-            labels=batch.data.__getattribute__(f"{batch.task}_label"),
-            masks=batch.data.__getattribute__(f"{batch.task}_mask"),
+            labels=batch.data.__getattribute__(f"{task}_label"),
+            masks=batch.data.__getattribute__(f"{task}_mask"),
             score=batch.data.score,
             contrastive_params=params,
         )
@@ -323,9 +299,6 @@ class IllustMetricLearningModule(L.LightningModule):
         # Freeze loaded weights
         self.model.freeze_loaded_weights()
 
-    def on_train_batch_start(self, batch, batch_idx):
-        self.batch_stat = BatchStat(batch_size=len(batch.data.image), start_time=time.time())
-
     def on_train_batch_end(self, outputs, batch, batch_idx):
         # Unfreeze deeper layers progressively
         total_steps = self.trainer.estimated_stepping_batches
@@ -341,10 +314,6 @@ class IllustMetricLearningModule(L.LightningModule):
             logger.info(f"Current step: {current_step}, unfreezing all layers")
             self.model.unfreeze_all()
             self.full_unfroze = True
-
-        if hasattr(self, "batch_stat"):
-            self.batch_stat.complete()
-            self._log_batch_stats(self.batch_stat, prefix="train")
 
     # ===== Metric Logging =====
 
@@ -492,12 +461,6 @@ class IllustMetricLearningModule(L.LightningModule):
 
         fig.tight_layout()
         return fig
-
-    def _log_batch_stats(self, batch_stat: BatchStat, prefix: str):
-        """Log batch-level performance metrics."""
-        self.log(f"{prefix}/batch_size", batch_stat.batch_size)
-        self.log(f"{prefix}/batch_time", batch_stat.duration)
-        self.log(f"{prefix}/samples_per_second", batch_stat.samples_per_second)
 
     # def _log_system_stats(self):
     #     """Log system resource usage."""
