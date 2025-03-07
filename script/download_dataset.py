@@ -53,6 +53,10 @@ def download_dataset(local_dir: str, dataset_dir: str):
         if not os.path.exists(os.path.dirname(dest_pathname)):
             os.makedirs(os.path.dirname(dest_pathname))
 
+        if os.path.exists(dest_pathname) and os.path.getsize(dest_pathname) > 0:
+            print(f"[{i + 1}/{len(keys)}] {k} already exists, skipping")
+            continue
+
         start = time.time()
         s3.download_file(s3_bucket, k, dest_pathname)
         elapsed = time.time() - start
