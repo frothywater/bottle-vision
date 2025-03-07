@@ -1,4 +1,3 @@
-import itertools
 from collections.abc import Iterator
 from dataclasses import dataclass
 
@@ -12,6 +11,12 @@ from .dataset import IllustDatasetItem
 class InterleavedDataItem:
     task: str
     data: IllustDatasetItem
+
+
+def cycling_iterator(loader):
+    while True:
+        for batch in loader:
+            yield batch
 
 
 class InterleavedDataLoader(Iterator):
@@ -32,10 +37,9 @@ class InterleavedDataLoader(Iterator):
         self.probs = probs
 
         self.iterators = {}
-        for key in self.loaders:
-            loader = self.loaders[key]
+        for key, loader in self.loaders.items():
             if len(loader) < self.max_len:
-                self.iterators[key] = itertools.cycle(iter(loader))
+                self.iterators[key] = cycling_iterator(loader)
             else:
                 self.iterators[key] = iter(loader)
 
