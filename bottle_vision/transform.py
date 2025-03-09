@@ -110,7 +110,8 @@ def get_style_transforms(image_size: int, mean: list[float], std: list[float]):
             T.ToImage(),
             T.RandomHorizontalFlip(),
             T.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.1),
-            T.RandomRotation(90, interpolation=InterpolationMode.BILINEAR, fill=255),
+            # Problem: Rotation is too slow (~40ms/image)
+            # T.RandomRotation(90, interpolation=InterpolationMode.BILINEAR, fill=255),
             CustomRandomCrop(0.5, 1.0),
             CustomResize(size=image_size, interpolation=InterpolationMode.BICUBIC),
             PadSquare(fill=255),

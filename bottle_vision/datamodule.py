@@ -94,6 +94,7 @@ class IllustDataModule(L.LightningDataModule):
             num_workers=self.hparams.num_workers,
             prefetch_factor=self.hparams.prefetch_factor,
             collate_fn=self._collate_fn,
+            pin_memory=True,
         )
 
     def val_dataloader(self):
@@ -119,4 +120,5 @@ class IllustDataModule(L.LightningDataModule):
             num_workers=self.hparams.num_workers,
             prefetch_factor=self.hparams.prefetch_factor,
             collate_fn=self._collate_fn,
+            pin_memory=True,
         )
