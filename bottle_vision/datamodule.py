@@ -6,10 +6,8 @@ import torch
 import torchvision.transforms.v2 as T
 from torch.utils.data import DataLoader
 
-from .batch_sampler import BalancedClassBatchSampler
-from .dataloader import InterleavedDataLoader
-from .dataset import IllustDataset
-from .transform import get_content_transforms, get_shared_transforms, get_style_transforms
+from .batch_sampler import BalancedClassBatchSampler, InterleavedBatchSampler
+from .dataset import IllustDataset, TaskIllustDataset
 
 
 class IllustDataModule(L.LightningDataModule):
@@ -26,7 +24,7 @@ class IllustDataModule(L.LightningDataModule):
         num_artists: int,
         num_characters: int,
         num_workers: int = 4,
-        prefetch_factor: int = 2,
+        prefetch_factor: Optional[int] = None,
         image_size: int = 448,
         valid_parquet_path: Optional[str] = None,
         valid_tar_dir: Optional[str] = None,
@@ -39,14 +37,12 @@ class IllustDataModule(L.LightningDataModule):
         super().__init__()
         self.save_hyperparameters()
 
-        self.plain_transforms = T.Compose(get_shared_transforms(image_size, mean, std))
-        self.content_transforms = T.Compose(get_content_transforms() + get_shared_transforms(image_size, mean, std))
-        self.style_transforms = T.Compose(get_style_transforms() + get_shared_transforms(image_size, mean, std))
-
     def _collate_fn(self, batch):
         # Custom collate function to handle dataclass objects
         if len(batch) == 0:
             return batch
+        if batch[0] is None:
+            return None
         if hasattr(batch[0], "__dataclass_fields__"):
             return type(batch[0])(
                 *[self._collate_fn([getattr(d, f) for d in batch]) for f in batch[0].__dataclass_fields__]
@@ -64,73 +60,40 @@ class IllustDataModule(L.LightningDataModule):
         with open(self.hparams.train_character_dict_path) as f:
             character_dict = json.load(f)
 
-        # Separate dataset for content (tags, characters) and style (artists)
-        # Apply different data augmentation
-        content_dataset = IllustDataset(
+        indices_dicts = dict(tag=tag_dict, artist=artist_dict, character=character_dict)
+        dataset = TaskIllustDataset(
             parquet_path=self.hparams.train_parquet_path,
             tar_dir=self.hparams.train_tar_dir,
             num_tags=self.hparams.num_tags,
             num_artists=self.hparams.num_artists,
             num_characters=self.hparams.num_characters,
-            transform=self.content_transforms,
+            image_size=self.hparams.image_size,
+            mean=self.hparams.mean,
+            std=self.hparams.std,
             label_smoothing_eps=self.hparams.label_smoothing_eps,
-        )
-        style_dataset = IllustDataset(
-            parquet_path=self.hparams.train_parquet_path,
-            tar_dir=self.hparams.train_tar_dir,
-            num_tags=self.hparams.num_tags,
-            num_artists=self.hparams.num_artists,
-            num_characters=self.hparams.num_characters,
-            transform=self.style_transforms,
-            label_smoothing_eps=self.hparams.label_smoothing_eps,
+            tasks=list(indices_dicts.keys()),
         )
 
         # Balanced class batch sampler for training
-        tag_sampler = BalancedClassBatchSampler(
-            indices_dict=tag_dict,
-            classes_per_batch=self.hparams.classes_per_batch,
-            samples_per_class=self.hparams.samples_per_class,
-            sample_cutoff=self.hparams.sample_cutoff,
-        )
-        artist_sampler = BalancedClassBatchSampler(
-            indices_dict=artist_dict,
-            classes_per_batch=self.hparams.classes_per_batch,
-            samples_per_class=self.hparams.samples_per_class,
-            sample_cutoff=self.hparams.sample_cutoff,
-        )
-        character_sampler = BalancedClassBatchSampler(
-            indices_dict=character_dict,
-            classes_per_batch=self.hparams.classes_per_batch,
-            samples_per_class=self.hparams.samples_per_class,
-            sample_cutoff=self.hparams.sample_cutoff,
-        )
+        samplers = {}
+        for task, indices_dict in indices_dicts.items():
+            samplers[task] = BalancedClassBatchSampler(
+                task=task,
+                indices_dict=indices_dict,
+                classes_per_batch=self.hparams.classes_per_batch,
+                samples_per_class=self.hparams.samples_per_class,
+                sample_cutoff=self.hparams.sample_cutoff,
+            )
 
-        # DataLoader
-        tag_loader = DataLoader(
-            content_dataset,
-            batch_sampler=tag_sampler,
-            num_workers=self.hparams.num_workers,
-            prefetch_factor=self.hparams.prefetch_factor,
-            collate_fn=self._collate_fn,
-        )
-        artist_loader = DataLoader(
-            style_dataset,
-            batch_sampler=artist_sampler,
-            num_workers=self.hparams.num_workers,
-            prefetch_factor=self.hparams.prefetch_factor,
-            collate_fn=self._collate_fn,
-        )
-        character_loader = DataLoader(
-            content_dataset,
-            batch_sampler=character_sampler,
-            num_workers=self.hparams.num_workers,
-            prefetch_factor=self.hparams.prefetch_factor,
-            collate_fn=self._collate_fn,
-        )
+        # Interleaved batch sampler for different tasks
+        interleaved_sampler = InterleavedBatchSampler(samplers=samplers, probs=self.hparams.task_probs)
 
-        # Return interleaved dataloader for 3 tasks
-        return InterleavedDataLoader(
-            {"tag": tag_loader, "character": character_loader, "artist": artist_loader}, probs=self.hparams.task_probs
+        return DataLoader(
+            dataset,
+            batch_sampler=interleaved_sampler,
+            num_workers=self.hparams.num_workers,
+            prefetch_factor=self.hparams.prefetch_factor,
+            collate_fn=self._collate_fn,
         )
 
     def val_dataloader(self):
@@ -144,15 +107,16 @@ class IllustDataModule(L.LightningDataModule):
             num_tags=self.hparams.num_tags,
             num_artists=self.hparams.num_artists,
             num_characters=self.hparams.num_characters,
-            transform=self.plain_transforms,
+            image_size=self.hparams.image_size,
+            mean=self.hparams.mean,
+            std=self.hparams.std,
             label_smoothing_eps=0,
         )
         # Use default sampler (load all images sequentially)
-        dataloader = DataLoader(
+        return DataLoader(
             dataset,
             batch_size=self.hparams.classes_per_batch * self.hparams.samples_per_class,
             num_workers=self.hparams.num_workers,
             prefetch_factor=self.hparams.prefetch_factor,
             collate_fn=self._collate_fn,
         )
-        return dataloader

@@ -11,7 +11,6 @@ from torchmetrics import AveragePrecision, MetricCollection, PrecisionRecallCurv
 
 from bottle_vision.dataset import IllustDatasetItem
 
-from .dataloader import InterleavedDataItem
 from .losses import ContrastiveLossConfig, ContrastiveLossParams, LossComponents, LossWeights
 from .model import IllustEmbeddingModel, ModelOutput
 
@@ -146,15 +145,15 @@ class IllustMetricLearningModule(L.LightningModule):
                 bin_masks.append(mask)
         return bin_masks
 
-    def training_step(self, batch: InterleavedDataItem, batch_idx: int):
-        task = batch.task
+    def training_step(self, batch: IllustDatasetItem, batch_idx: int):
+        task = batch.task[0]
         params = ContrastiveLossParams.from_config(self.hparams[f"{task}_contrastive_config"])
         output: ModelOutput = self.model.forward_task(
-            x=batch.data.image,
+            x=batch.image,
             task=task,
-            labels=batch.data.__getattribute__(f"{task}_label"),
-            masks=batch.data.__getattribute__(f"{task}_mask"),
-            score=batch.data.score,
+            labels=batch.__getattribute__(f"{task}_label"),
+            masks=batch.__getattribute__(f"{task}_mask"),
+            score=batch.score,
             contrastive_params=params,
         )
 
@@ -164,7 +163,7 @@ class IllustMetricLearningModule(L.LightningModule):
             total_loss /= self.trainer.accumulate_grad_batches
 
         # Log all metrics
-        self.log_dict(log_dict("train", output.losses, total_loss))
+        self.log_dict(log_dict("train", output.losses, total_loss), batch_size=batch.image.shape[0])
 
         return total_loss
 
@@ -189,7 +188,7 @@ class IllustMetricLearningModule(L.LightningModule):
         total_loss = output.losses.weighted_sum(self.hparams.loss_weights)
 
         # Log all metrics
-        self.log_dict(log_dict("val", output.losses, total_loss))
+        self.log_dict(log_dict("val", output.losses, total_loss), batch_size=batch.image.shape[0])
 
         # Update metrics for the task
         for task, sim_preds in output.sim_preds.items():
@@ -227,7 +226,7 @@ class IllustMetricLearningModule(L.LightningModule):
         total_loss = output.losses.weighted_sum(self.hparams.loss_weights)
 
         # Log all metrics
-        self.log_dict(log_dict("test", output.losses, total_loss))
+        self.log_dict(log_dict("test", output.losses, total_loss), batch_size=batch.image.shape[0])
 
         # Update metrics for the task
         for task, sim_preds in output.sim_preds.items():

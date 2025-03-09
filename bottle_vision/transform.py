@@ -1,7 +1,7 @@
 import numpy as np
 import torch
 import torchvision.transforms.v2 as T
-from PIL import Image
+from torchvision.transforms.functional import InterpolationMode
 
 
 class PadSquare(T.Transform):
@@ -11,8 +11,8 @@ class PadSquare(T.Transform):
         self.fill = fill
         super().__init__()
 
-    def forward(self, x: Image.Image) -> Image.Image:
-        w, h = x.size
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        h, w = x.shape[-2:]
         if h == w:
             return x
         size = max(h, w)
@@ -21,6 +21,27 @@ class PadSquare(T.Transform):
         pad_left = (size - w) // 2
         pad_right = size - w - pad_left
         return T.functional.pad(x, (pad_left, pad_top, pad_right, pad_bottom), fill=self.fill)
+
+
+class CustomResize(T.Transform):
+    size: int
+    interpolation: InterpolationMode
+
+    def __init__(self, size: int, interpolation: InterpolationMode):
+        self.size = size
+        self.interpolation = interpolation
+        super().__init__()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # Make sure the longer side is resized to the target size
+        h, w = x.shape[-2:]
+        if h > w:
+            new_h = self.size
+            new_w = int(w * self.size / h)
+        else:
+            new_w = self.size
+            new_h = int(h * self.size / w)
+        return T.functional.resize(x, (new_h, new_w), interpolation=self.interpolation)
 
 
 class CustomRandomCrop(T.Transform):
@@ -32,8 +53,8 @@ class CustomRandomCrop(T.Transform):
         self.max_ratio = max_ratio
         super().__init__()
 
-    def forward(self, x: Image.Image) -> Image.Image:
-        w, h = x.size
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        h, w = x.shape[-2:]
         if h > w:
             h_ratio = np.random.uniform(self.min_ratio, self.max_ratio)
             # Ensure the aspect ratio is at least the original
@@ -53,30 +74,48 @@ class RGBToBGR(T.Transform):
         return x[[2, 1, 0], :, :]
 
 
-def get_content_transforms():
+def get_plain_transforms(image_size: int, mean: list[float], std: list[float]):
+    return T.Compose(
+        [
+            T.ToImage(),
+            CustomResize(size=image_size, interpolation=InterpolationMode.BICUBIC),
+            PadSquare(fill=255),
+            T.ToDtype(torch.float32, scale=True),
+            T.Normalize(mean=mean, std=std),
+            RGBToBGR(),
+        ]
+    )
+
+
+def get_content_transforms(image_size: int, mean: list[float], std: list[float]):
     # For content, use subtler augmentations to preserve content
-    return [
-        T.RandomHorizontalFlip(p=0.25),
-        T.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.02),
-    ]
+    return T.Compose(
+        [
+            T.ToImage(),
+            CustomResize(size=image_size, interpolation=InterpolationMode.BICUBIC),
+            T.RandomHorizontalFlip(p=0.25),
+            T.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.02),
+            PadSquare(fill=255),
+            T.ToDtype(torch.float32, scale=True),
+            T.Normalize(mean=mean, std=std),
+            RGBToBGR(),
+        ]
+    )
 
 
-def get_style_transforms():
+def get_style_transforms(image_size: int, mean: list[float], std: list[float]):
     # For style, use more aggressive augmentations to encourage robustness
-    return [
-        T.RandomHorizontalFlip(),
-        T.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.1),
-        T.RandomRotation(90, interpolation=Image.BICUBIC, fill=255),
-        CustomRandomCrop(0.5, 1.0),
-    ]
-
-
-def get_shared_transforms(image_size: int, mean: list[float], std: list[float]):
-    return [
-        PadSquare(fill=255),
-        T.Resize(image_size, interpolation=Image.BICUBIC),
-        T.ToImage(),
-        T.ToDtype(torch.float32, scale=True),
-        T.Normalize(mean=mean, std=std),
-        RGBToBGR(),
-    ]
+    return T.Compose(
+        [
+            T.ToImage(),
+            T.RandomHorizontalFlip(),
+            T.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.1),
+            T.RandomRotation(90, interpolation=InterpolationMode.BILINEAR, fill=255),
+            CustomRandomCrop(0.5, 1.0),
+            CustomResize(size=image_size, interpolation=InterpolationMode.BICUBIC),
+            PadSquare(fill=255),
+            T.ToDtype(torch.float32, scale=True),
+            T.Normalize(mean=mean, std=std),
+            RGBToBGR(),
+        ]
+    )
