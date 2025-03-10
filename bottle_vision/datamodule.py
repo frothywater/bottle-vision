@@ -23,6 +23,7 @@ class IllustDataModule(L.LightningDataModule):
         num_tags: int,
         num_artists: int,
         num_characters: int,
+        tasks: list[str],
         num_workers: int = 4,
         prefetch_factor: Optional[int] = None,
         image_size: int = 448,
@@ -53,30 +54,36 @@ class IllustDataModule(L.LightningDataModule):
             return torch.utils.data._utils.collate.default_collate(batch)
 
     def train_dataloader(self):
-        with open(self.hparams.train_tag_dict_path) as f:
-            tag_dict = json.load(f)
-        with open(self.hparams.train_artist_dict_path) as f:
-            artist_dict = json.load(f)
-        with open(self.hparams.train_character_dict_path) as f:
-            character_dict = json.load(f)
+        task_dicts = {}
+        if "tag" in self.hparams.tasks:
+            with open(self.hparams.train_tag_dict_path) as f:
+                tag_dict = json.load(f)
+            task_dicts["tag"] = tag_dict
+        if "artist" in self.hparams.tasks:
+            with open(self.hparams.train_artist_dict_path) as f:
+                artist_dict = json.load(f)
+            task_dicts["artist"] = artist_dict
+        if "character" in self.hparams.tasks:
+            with open(self.hparams.train_character_dict_path) as f:
+                character_dict = json.load(f)
+            task_dicts["character"] = character_dict
 
-        indices_dicts = dict(tag=tag_dict, artist=artist_dict, character=character_dict)
         dataset = TaskIllustDataset(
             parquet_path=self.hparams.train_parquet_path,
             tar_dir=self.hparams.train_tar_dir,
             num_tags=self.hparams.num_tags,
             num_artists=self.hparams.num_artists,
             num_characters=self.hparams.num_characters,
+            tasks=list(task_dicts.keys()),
             image_size=self.hparams.image_size,
             mean=self.hparams.mean,
             std=self.hparams.std,
             label_smoothing_eps=self.hparams.label_smoothing_eps,
-            tasks=list(indices_dicts.keys()),
         )
 
         # Balanced class batch sampler for training
         samplers = {}
-        for task, indices_dict in indices_dicts.items():
+        for task, indices_dict in task_dicts.items():
             samplers[task] = BalancedClassBatchSampler(
                 task=task,
                 indices_dict=indices_dict,
@@ -108,6 +115,7 @@ class IllustDataModule(L.LightningDataModule):
             num_tags=self.hparams.num_tags,
             num_artists=self.hparams.num_artists,
             num_characters=self.hparams.num_characters,
+            tasks=self.hparams.tasks,
             image_size=self.hparams.image_size,
             mean=self.hparams.mean,
             std=self.hparams.std,

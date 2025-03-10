@@ -47,6 +47,7 @@ class IllustDataset(Dataset):
         num_tags: int,
         num_artists: int,
         num_characters: int,
+        tasks: list[str],
         image_size: int = 448,
         mean: list[float] = [0.5, 0.5, 0.5],
         std: list[float] = [0.5, 0.5, 0.5],
@@ -59,6 +60,7 @@ class IllustDataset(Dataset):
         self.num_artists = num_artists
         self.num_characters = num_characters
         self.label_smoothing_eps = label_smoothing_eps
+        self.tasks = tasks
         self.plain_transforms = get_plain_transforms(image_size, mean, std)
 
         # Initialize a cache for opened tar files.
@@ -153,21 +155,20 @@ class IllustDataset(Dataset):
         image = self._process_image(image)
         image = self._transform_image(image)
 
-        tag_label, tag_mask = self._tag_label(row)
-        character_label, character_mask = self._character_label(row)
-        artist_label, artist_mask = self._artist_label(row)
-
-        return IllustDatasetItem(
+        item = IllustDatasetItem(
             image=image,
-            tag_label=tag_label,
-            artist_label=artist_label,
-            character_label=character_label,
-            tag_mask=tag_mask,
-            artist_mask=artist_mask,
-            character_mask=character_mask,
             score=self._quality_score(row),
             filename=row["filename"][0].as_py(),
         )
+
+        if "tag" in self.tasks:
+            item.tag_label, item.tag_mask = self._tag_label(row)
+        if "artist" in self.tasks:
+            item.artist_label, item.artist_mask = self._artist_label(row)
+        if "character" in self.tasks:
+            item.character_label, item.character_mask = self._character_label(row)
+
+        return item
 
     def __del__(self):
         # Ensure all file handles are closed when the dataset is destroyed.
@@ -209,13 +210,13 @@ class TaskIllustDataset(IllustDataset):
             num_tags=num_tags,
             num_artists=num_artists,
             num_characters=num_characters,
+            tasks=tasks,
             image_size=image_size,
             mean=mean,
             std=std,
             label_smoothing_eps=label_smoothing_eps,
         )
 
-        self.tasks = tasks
         self.content_transforms = get_content_transforms(image_size, mean, std)
         self.style_transforms = get_style_transforms(image_size, mean, std)
 

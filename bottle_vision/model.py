@@ -41,8 +41,10 @@ class IllustEmbeddingModel(nn.Module):
         tag_temp: float,
         artist_temp: float,
         character_temp: float,
+        tasks: list[str],
     ):
         super().__init__()
+        self.tasks = tasks
 
         # Backbone
         self.backbone = timm.create_model(
@@ -56,42 +58,45 @@ class IllustEmbeddingModel(nn.Module):
             act_layer="gelu_tanh",
         )
 
-        # Projection heads
         self.hidden_dim = self.backbone.embed_dim
-        self.tag_head = nn.Linear(self.hidden_dim, tag_embed_dim)
-        self.artist_head = nn.Linear(self.hidden_dim, artist_embed_dim)
-        self.character_head = nn.Linear(self.hidden_dim, character_embed_dim)
-        self.quality_head = nn.Linear(self.hidden_dim, 1)
         self.dropout = nn.Dropout(dropout)
 
-        # if tag and character heads are square, init as identity
-        if tag_embed_dim == self.hidden_dim:
-            self.tag_head.weight.data = torch.eye(self.hidden_dim)
-            self.tag_head.bias.data = torch.zeros(self.hidden_dim)
-            logger.info("Initialized tag head as identity")
-        if character_embed_dim == self.hidden_dim:
-            self.character_head.weight.data = torch.eye(self.hidden_dim)
-            self.character_head.bias.data = torch.zeros(self.hidden_dim)
-            logger.info("Initialized character head as identity")
+        # Projection heads and prototypes
+        if "tag" in tasks:
+            if tag_embed_dim == self.hidden_dim and "artist" not in tasks:
+                self.tag_head = nn.Identity()
+                logger.info("Set tag head as identity")
+            else:
+                self.tag_head = nn.Linear(self.hidden_dim, tag_embed_dim, bias=False)
+                nn.init.orthogonal_(self.tag_head.weight)
+            self.tag_prototypes = nn.Parameter(torch.randn(num_tags, tag_embed_dim))
+            self.tag_temp = nn.Parameter(torch.ones(1, num_tags) * tag_temp)
 
-        # Learnable prototypes
-        self.tag_prototypes = nn.Parameter(torch.randn(num_tags, tag_embed_dim))
-        self.character_prototypes = nn.Parameter(torch.randn(num_characters, character_embed_dim))
-        self.artist_prototypes = nn.Parameter(torch.randn(num_artists, artist_embed_dim))
-        nn.init.xavier_normal_(self.tag_prototypes)
-        nn.init.xavier_normal_(self.artist_prototypes)
-        nn.init.xavier_normal_(self.character_prototypes)
+        if "character" in tasks:
+            if character_embed_dim == self.hidden_dim and "artist" not in tasks:
+                self.character_head = nn.Identity()
+                logger.info("Set character head as identity")
+            else:
+                self.character_head = nn.Linear(self.hidden_dim, character_embed_dim, bias=False)
+                nn.init.orthogonal_(self.character_head.weight)
+            self.character_prototypes = nn.Parameter(torch.randn(num_characters, character_embed_dim))
+            self.character_temp = nn.Parameter(torch.ones(1, num_characters) * character_temp)
 
-        self.tag_temp = nn.Parameter(torch.ones(1, num_tags) * tag_temp)
-        self.artist_temp = nn.Parameter(torch.ones(1, num_artists) * artist_temp)
-        self.character_temp = nn.Parameter(torch.ones(1, num_characters) * character_temp)
+        if "artist" in tasks:
+            self.artist_head = nn.Linear(self.hidden_dim, artist_embed_dim)
+            self.artist_prototypes = nn.Parameter(torch.randn(num_artists, artist_embed_dim))
+            nn.init.xavier_normal_(self.artist_prototypes)
+            self.artist_temp = nn.Parameter(torch.ones(1, num_artists) * artist_temp)
+
+        if "quality" in tasks:
+            self.quality_head = nn.Linear(self.hidden_dim, 1)
 
     def forward(self, x: torch.Tensor):
         features = self.backbone(x)
-        tag_emb = self.dropout(self.tag_head(features))
-        artist_emb = self.dropout(self.artist_head(features))
-        character_emb = self.dropout(self.character_head(features))
-        quality_score = self.quality_head(features).squeeze(-1)
+        tag_emb = self.dropout(self.tag_head(features)) if "tag" in self.tasks else None
+        artist_emb = self.dropout(self.artist_head(features)) if "artist" in self.tasks else None
+        character_emb = self.dropout(self.character_head(features)) if "character" in self.tasks else None
+        quality_score = self.quality_head(features).squeeze(-1) if "quality" in self.tasks else None
         return tag_emb, artist_emb, character_emb, quality_score
 
     def forward_task(
@@ -115,15 +120,17 @@ class IllustEmbeddingModel(nn.Module):
             contrastive_params=contrastive_params,
             masks=masks,
         )
+        losses = LossComponents(**{task: task_loss})
 
         # Compute quality loss
-        quality_score = self.quality_head(features).squeeze(-1)
-        quality_loss = F.mse_loss(quality_score, score)
+        if "quality" in self.tasks:
+            quality_score = self.quality_head(features).squeeze(-1)
+            losses.quality = F.mse_loss(quality_score, score)
 
         # Compute orthogonality losses
-        ortho_loss = self._compute_ortho_loss(task)
+        if "artist" in self.tasks:
+            losses.ortho = self._compute_ortho_loss(task)
 
-        losses = LossComponents(quality=quality_loss, ortho=ortho_loss, **{task: task_loss})
         return ModelOutput(sim_preds=sim_preds, losses=losses)
 
     def _compute_task_output(
@@ -136,6 +143,7 @@ class IllustEmbeddingModel(nn.Module):
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Compute similarities and loss for a specific task."""
         # Select appropriate head and prototypes based on task
+        assert task in self.tasks, f"Task {task} not in model tasks: {self.tasks}"
         if task == "tag":
             head = self.tag_head
             prototypes = self.tag_prototypes
@@ -193,11 +201,13 @@ class IllustEmbeddingModel(nn.Module):
             losses.__setattr__(task, task_loss)
 
         # Compute quality loss
-        quality_score = self.quality_head(features).squeeze(-1)
-        losses.quality = F.mse_loss(quality_score, score)
+        if "quality" in self.tasks:
+            quality_score = self.quality_head(features).squeeze(-1)
+            losses.quality = F.mse_loss(quality_score, score)
 
         # Compute orthogonality losses
-        losses.ortho = self._compute_ortho_loss("artist")
+        if "artist" in self.tasks:
+            losses.ortho = self._compute_ortho_loss("artist")
 
         return ModelOutput(sim_preds=sim_preds, losses=losses)
 
@@ -249,18 +259,30 @@ class IllustEmbeddingModel(nn.Module):
 
         # head -> (current random head) -> tag and character prototypes
         if num_tags + num_characters == pretrained_model.num_classes:
-            # extract embeddings from pretrained head
-            pretrained_tag_embeddings = pretrained_model.head.weight[:num_tags].to(self.tag_head.weight.device)
-            pretrained_character_embeddings = pretrained_model.head.weight[num_tags:].to(
-                self.character_head.weight.device
-            )
+            if "tag" in self.tasks:
+                # extract embeddings from pretrained head
+                pretrained_tag_embeddings = pretrained_model.head.weight[:num_tags].to(self.tag_prototypes.device)
+                # project embeddings to tag and character prototypes
+                if hasattr(self.tag_head, "weight"):
+                    # (num_classes, hidden_dim) @ (class_dim, hidden_dim).T -> (num_classes, class_dim)
+                    self.tag_prototypes.data = pretrained_tag_embeddings @ self.tag_head.weight.T
+                    logger.info(f"Loaded tag prototypes from head: {self.tag_prototypes.shape}, projected by head")
+                else:
+                    self.tag_prototypes.data = pretrained_tag_embeddings
+                    logger.info(f"Loaded tag prototypes from head: {self.tag_prototypes.shape}")
 
-            # project embeddings to tag and character prototypes
-            # (num_classes, hidden_dim) @ (class_dim, hidden_dim).T -> (num_classes, class_dim)
-            self.tag_prototypes.data = pretrained_tag_embeddings @ self.tag_head.weight.T
-            self.character_prototypes.data = pretrained_character_embeddings @ self.character_head.weight.T
-            logger.info(f"Loaded tag prototypes from head: {self.tag_prototypes.shape}")
-            logger.info(f"Loaded character prototypes from head: {self.character_prototypes.shape}")
+            if "character" in self.tasks:
+                pretrained_character_embeddings = pretrained_model.head.weight[num_tags:].to(
+                    self.character_prototypes.device
+                )
+                if hasattr(self.character_head, "weight"):
+                    self.character_prototypes.data = pretrained_character_embeddings @ self.character_head.weight.T
+                    logger.info(
+                        f"Loaded character prototypes from head: {self.character_prototypes.shape}, projected by head"
+                    )
+                else:
+                    self.character_prototypes.data = pretrained_character_embeddings
+                    logger.info(f"Loaded character prototypes from head: {self.character_prototypes.shape}")
 
     def _copy_weights(self, target: nn.Module, source: nn.Module):
         """Copy weights and biases from source to target."""

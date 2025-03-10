@@ -81,8 +81,9 @@ class InterleavedBatchSampler(BatchSampler):
         self.samplers = samplers
 
         if probs is not None:
+            probs = {key: prob for key, prob in probs.items() if key in samplers}
             self.probs = {key: prob / sum(probs.values()) for key, prob in probs.items()}
-            self.total_batches = max(math.ceil(len(sampler) / probs[key]) for key, sampler in samplers.items())
+            self.total_batches = max(math.ceil(len(sampler) / self.probs[key]) for key, sampler in samplers.items())
 
             # Prepare shuffled key index list
             task_indices = []

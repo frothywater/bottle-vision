@@ -1,0 +1,104 @@
+seed_everything: 42
+trainer:
+  # accelerator: mps
+  accelerator: auto
+  devices: 1
+  precision: bf16-mixed # Enable mixed precision training
+  # precision: 32
+  gradient_clip_val: 1.0
+  # accumulate_grad_batches: 3 # Critical for sequential multi-task training
+  max_steps: 25000
+  val_check_interval: 5000 # batches
+  default_root_dir: /volume/exp
+  log_every_n_steps: 1
+  # fast_dev_run: 3
+  # num_sanity_val_steps: 3
+  # limit_val_batches: 1000
+  # enable_progress_bar: false
+  # profiler:
+  #   class_path: lightning.pytorch.profilers.PyTorchProfiler
+  callbacks:
+    - class_path: lightning.pytorch.callbacks.ModelCheckpoint
+      init_args:
+        filename: step={step}-val_loss={val/loss/total:.2f}
+        mode: min
+        save_top_k: 3
+        monitor: val/loss/total
+        every_n_train_steps: 2501
+        auto_insert_metric_name: false
+        save_weights_only: true
+    - class_path: lightning.pytorch.callbacks.ModelSummary
+      init_args:
+        max_depth: 3
+    - class_path: lightning.pytorch.callbacks.LearningRateMonitor
+      init_args:
+        logging_interval: step
+    # - class_path: lightning.pytorch.callbacks.DeviceStatsMonitor
+
+model:
+  num_tags: 8110
+  num_artists: 1024
+  num_characters: 2751
+  backbone_variant: vit_base_patch16_224
+  cls_token: false
+  reg_tokens: 0
+  image_size: 448
+  tag_embed_dim: 768
+  character_embed_dim: 768
+  dropout: 0.1
+  tasks: [tag, character]
+  loss_weights:
+    tag: 1.0
+    artist: 0.0
+    character: 1.0
+    quality: 0.0
+    ortho: 0.0
+  tag_contrastive_config:
+    initial_temp: 0.1
+    margin: 0.2
+    central_weight: 1.5
+  artist_contrastive_config:
+    initial_temp: 0.1
+    margin: 0.2
+    central_weight: 1.5
+  character_contrastive_config:
+    initial_temp: 0.1
+    margin: 0.2
+    central_weight: 1.5
+  base_lr: 3e-5
+  backbone_lr: 3e-5
+  lr_start_ratio: 0.1
+  lr_end_ratio: 0.1
+  warmup_percent: 0.1
+  unfreeze_schedule:
+    2: 0.0
+    4: 0.20
+    6: 0.36
+    8: 0.52
+    10: 0.68
+    12: 0.84
+  tag_dict_path: ../danbooru2023/train/tag_indices_full.json
+  artist_dict_path: ../danbooru2023/train/artist_indices.json
+  character_dict_path: ../danbooru2023/train/character_indices_full.json
+
+data:
+  num_tags: 8110
+  num_artists: 1024
+  num_characters: 2751
+  classes_per_batch: 16
+  samples_per_class: 4
+  num_workers: 16
+  image_size: 448
+  label_smoothing_eps: 0.1
+  tasks: [tag, character]
+  task_probs:
+    tag: 0.75
+    character: 0.25
+  sample_cutoff: 24
+  train_parquet_path: ../danbooru2023/train/images.parquet
+  train_tar_dir: ../danbooru2023/train
+  valid_parquet_path: ../danbooru2023/valid/images.parquet
+  valid_tar_dir: ../danbooru2023/valid
+  train_tag_dict_path: ../danbooru2023/train/tag_indices.json
+  train_artist_dict_path: ../danbooru2023/train/artist_indices.json
+  train_character_dict_path: ../danbooru2023/train/character_indices.json

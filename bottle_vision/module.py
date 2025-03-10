@@ -18,16 +18,10 @@ logger = logging.getLogger("bottle_vision")
 
 
 def log_dict(stage: str, losses: LossComponents, total_loss: torch.Tensor) -> dict[str, torch.Tensor]:
-    result = {
-        f"{stage}/loss/quality": losses.quality,
-        f"{stage}/loss/ortho": losses.ortho,
-        f"{stage}/loss/total": total_loss,
-    }
-    for task in ["tag", "artist", "character"]:
-        loss = losses.__getattribute__(task)
-        if not isinstance(loss, float):
-            # If a loss is not float, then it is trained by that task
-            result[f"{stage}/loss/{task}"] = loss
+    result = {f"{stage}/loss/total": total_loss}
+    for key, value in losses.__dict__.items():
+        if isinstance(value, torch.Tensor):
+            result[f"{stage}/loss/{key}"] = value
     return result
 
 
@@ -47,6 +41,7 @@ class IllustMetricLearningModule(L.LightningModule):
         tag_dict_path: str,
         artist_dict_path: str,
         character_dict_path: str,
+        tasks: list[str],
         # model
         backbone_variant: str = "vit_base_patch16_224",
         image_size: int = 448,
@@ -90,6 +85,7 @@ class IllustMetricLearningModule(L.LightningModule):
             tag_temp=tag_contrastive_config["initial_temp"],
             artist_temp=artist_contrastive_config["initial_temp"],
             character_temp=character_contrastive_config["initial_temp"],
+            tasks=tasks,
         )
 
         # Load and process class frequencies
@@ -162,12 +158,21 @@ class IllustMetricLearningModule(L.LightningModule):
         return total_loss
 
     def validation_step(self, batch: IllustDatasetItem, batch_idx: int):
-        labels = dict(tag=batch.tag_label, artist=batch.artist_label, character=batch.character_label)
-        masks = dict(tag=batch.tag_mask, artist=batch.artist_mask, character=batch.character_mask)
-        tag_params = ContrastiveLossParams.from_config(self.hparams.tag_contrastive_config)
-        artist_params = ContrastiveLossParams.from_config(self.hparams.artist_contrastive_config)
-        character_params = ContrastiveLossParams.from_config(self.hparams.character_contrastive_config)
-        params = dict(tag=tag_params, artist=artist_params, character=character_params)
+        labels = {}
+        masks = {}
+        params = {}
+        if batch.tag_label is not None and "tag" in self.hparams.tasks:
+            labels["tag"] = batch.tag_label
+            masks["tag"] = batch.tag_mask
+            params["tag"] = ContrastiveLossParams.from_config(self.hparams.tag_contrastive_config)
+        if batch.artist_label is not None and "artist" in self.hparams.tasks:
+            labels["artist"] = batch.artist_label
+            masks["artist"] = batch.artist_mask
+            params["artist"] = ContrastiveLossParams.from_config(self.hparams.artist_contrastive_config)
+        if batch.character_label is not None and "character" in self.hparams.tasks:
+            labels["character"] = batch.character_label
+            masks["character"] = batch.character_mask
+            params["character"] = ContrastiveLossParams.from_config(self.hparams.character_contrastive_config)
 
         # Forward for all tasks
         output: ModelOutput = self.model.forward_all_tasks(
@@ -198,35 +203,6 @@ class IllustMetricLearningModule(L.LightningModule):
                 label = label.argmax(dim=1)
 
             self.val_metrics[task].update(sim_preds, label)
-
-        return total_loss
-
-    def test_step(self, batch: IllustDatasetItem, batch_idx: int):
-        labels = dict(tag=batch.tag_label, artist=batch.artist_label, character=batch.character_label)
-        tag_params = ContrastiveLossParams.from_config(self.hparams.tag_contrastive_config)
-        artist_params = ContrastiveLossParams.from_config(self.hparams.artist_contrastive_config)
-        character_params = ContrastiveLossParams.from_config(self.hparams.character_contrastive_config)
-        params = dict(tag=tag_params, artist=artist_params, character=character_params)
-
-        # Forward for all tasks
-        output: ModelOutput = self.model.forward_all_tasks(
-            x=batch.image,
-            labels=labels,
-            score=batch.score,
-            contrastive_params=params,
-        )
-
-        # Compute total loss
-        total_loss = output.losses.weighted_sum(self.hparams.loss_weights)
-
-        # Log all metrics
-        self.log_dict(log_dict("test", output.losses, total_loss), batch_size=batch.image.shape[0])
-
-        # Update metrics for the task
-        for task, sim_preds in output.sim_preds.items():
-            # Convert float to long (due to label smoothing)
-            label = labels[task].long()
-            self.test_metrics[task].update(sim_preds, label)
 
         return total_loss
 
@@ -317,6 +293,9 @@ class IllustMetricLearningModule(L.LightningModule):
             ("artist", self.hparams.num_artists),
             ("character", self.hparams.num_characters),
         ]:
+            if task not in self.hparams.tasks:
+                continue
+
             metric_type = "multiclass" if task == "artist" else "multilabel"
             kwargs = {"num_classes": num_classes} if metric_type == "multiclass" else {"num_labels": num_classes}
             # `MetricCollection` to share underlying computation
@@ -344,9 +323,6 @@ class IllustMetricLearningModule(L.LightningModule):
     def on_validation_epoch_end(self):
         self._shared_epoch_end("val", self.val_metrics)
 
-    def on_test_epoch_end(self):
-        self._shared_epoch_end("test", self.test_metrics)
-
     def _shared_epoch_end(self, stage: str, metrics: dict[str, MetricCollection]):
         """Shared logic for validation and test epoch end.
         Args:
@@ -355,6 +331,9 @@ class IllustMetricLearningModule(L.LightningModule):
         """
         # Process metrics for each task
         for task, bins in [("tag", self.tag_bins), ("artist", self.artist_bins), ("character", self.character_bins)]:
+            if task not in self.hparams.tasks:
+                continue
+
             # Get overall MAP and per-class AP scores
             metric_collection = metrics[task]
             overall_map = metric_collection[f"{stage}_{task}_map"].compute()
