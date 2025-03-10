@@ -304,8 +304,14 @@ class IllustEmbeddingModel(nn.Module):
 
         # No need to freeze tag and artist prototypes, since heads are learnable
 
-    def unfreeze_deeper_layers(self, num_layers: int):
+    def unfreeze_layers(self, num_layers: int):
         """Unfreeze the last num_layers transformer blocks."""
+        if num_layers >= len(self.backbone.blocks):
+            for param in self.parameters():
+                param.requires_grad = True
+            logger.info("Unfroze all parameters")
+            return
+
         for block in self.backbone.blocks[-num_layers:]:
             for param in block.parameters():
                 param.requires_grad = True
@@ -315,9 +321,3 @@ class IllustEmbeddingModel(nn.Module):
         self.backbone.norm.weight.requires_grad = True
         self.backbone.norm.bias.requires_grad = True
         logger.info("Unfroze norm weights")
-
-    def unfreeze_all(self):
-        """Unfreeze all parameters."""
-        for param in self.parameters():
-            param.requires_grad = True
-        logger.info("Unfroze all parameters")

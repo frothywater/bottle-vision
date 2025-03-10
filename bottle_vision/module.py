@@ -62,9 +62,7 @@ class IllustMetricLearningModule(L.LightningModule):
         lr_start_ratio: float = 0.1,
         lr_end_ratio: float = 0.1,
         warmup_percent: float = 0.05,
-        partial_unfreeze_percent: float = 0.2,
-        full_unfreeze_percent: float = 0.5,
-        partial_unfreeze_layers: int = 4,
+        unfreeze_schedule: dict[int, float] = {4: 0.33, 12: 0.67},
         # loss
         loss_weights: LossWeights = LossWeights(),
         tag_contrastive_config: ContrastiveLossConfig = ContrastiveLossConfig(),
@@ -106,10 +104,6 @@ class IllustMetricLearningModule(L.LightningModule):
 
         # Initialize metrics
         self.val_metrics = self._create_metrics("val")
-        # self.test_metrics = self._create_metrics("test")
-
-        self.partial_unfroze = False
-        self.full_unfroze = False
 
     def configure_model(self):
         self.model = torch.compile(self.model)
@@ -267,14 +261,23 @@ class IllustMetricLearningModule(L.LightningModule):
             ]
         )
 
-        # Calculate learning rate schedule
+        # Gradual unfreezing
         total_steps = self.trainer.estimated_stepping_batches
+        unfreeze_schedule = [
+            (int(percent * total_steps), int(layers)) for layers, percent in self.hparams.unfreeze_schedule.items()
+        ]
+        self.step_to_unfrozen_layers = dict(sorted(unfreeze_schedule, key=lambda x: x[0], reverse=True))
+        self.current_unfrozen_layers = 0
+        logger.info(f"Unfreeze schedule: {self.step_to_unfrozen_layers}")
+
+        # Calculate learning rate schedule
         warmup_steps = int(total_steps * self.hparams.warmup_percent)
-        backbone_start_steps = int(total_steps * self.hparams.partial_unfreeze_percent)
+        backbone_start_steps = min(self.step_to_unfrozen_layers.keys())
 
         # 1. parameters except for backbone: start from 0
         other_lr_fn = partial(self.lr_fn, start_steps=0, warmup_steps=warmup_steps, total_steps=total_steps)
         logger.info(f"Scheduling for other parameters: 0 -> {warmup_steps} -> {total_steps}")
+
         # 2. backbone parameters: start from when backbone is partially unfrozen
         backbone_lr_fn = partial(
             self.lr_fn, start_steps=backbone_start_steps, warmup_steps=warmup_steps, total_steps=total_steps
@@ -282,8 +285,8 @@ class IllustMetricLearningModule(L.LightningModule):
         logger.info(
             f"Scheduling for backbone parameters: {backbone_start_steps} -> {backbone_start_steps + warmup_steps} -> {total_steps}"
         )
-        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, [other_lr_fn, backbone_lr_fn])
 
+        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, [other_lr_fn, backbone_lr_fn])
         return {"optimizer": optimizer, "lr_scheduler": {"scheduler": scheduler, "interval": "step"}}
 
     def on_fit_start(self):
@@ -295,21 +298,12 @@ class IllustMetricLearningModule(L.LightningModule):
         # Freeze loaded weights
         self.model.freeze_loaded_weights()
 
-    def on_train_batch_end(self, outputs, batch, batch_idx):
-        # Unfreeze deeper layers progressively
-        total_steps = self.trainer.estimated_stepping_batches
-        current_step = self.trainer.global_step
-        partial_unfreeze_steps = int(total_steps * self.hparams.partial_unfreeze_percent)
-        full_unfreeze_steps = int(total_steps * self.hparams.full_unfreeze_percent)
-
-        if not self.partial_unfroze and current_step >= partial_unfreeze_steps:
-            logger.info(f"Current step: {current_step}, unfreezing deeper layers")
-            self.model.unfreeze_deeper_layers(num_layers=self.hparams.partial_unfreeze_layers)
-            self.partial_unfroze = True
-        elif not self.full_unfroze and current_step >= full_unfreeze_steps:
-            logger.info(f"Current step: {current_step}, unfreezing all layers")
-            self.model.unfreeze_all()
-            self.full_unfroze = True
+    def on_train_batch_start(self, batch, batch_idx):
+        # Gradual unfreezing
+        for step, layers in self.step_to_unfrozen_layers.items():
+            if self.global_step >= step and layers > self.current_unfrozen_layers:
+                self.model.unfreeze_layers(layers)
+                self.current_unfrozen_layers = layers
 
     # ===== Metric Logging =====
 
