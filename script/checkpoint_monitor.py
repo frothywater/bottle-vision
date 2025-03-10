@@ -45,7 +45,7 @@ def monitor_checkpoints(path_to_monitor):
     # Start monitoring the directory
     event_handler = CheckpointHandler(s3, s3_bucket)
     observer = Observer()
-    observer.schedule(event_handler, path=path_to_monitor, recursive=False)
+    observer.schedule(event_handler, path=path_to_monitor, recursive=True)
     observer.start()
     print(f"Started monitoring {path_to_monitor} for .ckpt files.")
 

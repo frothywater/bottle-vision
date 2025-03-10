@@ -28,7 +28,7 @@ TB_PID=$!
 
 echo "Starting training..."
 # Run the training script (assumed to be repo/train.py)
-python main.py fit --config config/test.yaml
+python main.py fit --config config/test_organize.yaml
 TRAIN_EXIT_CODE=$?
 
 echo "Training finished with exit code $TRAIN_EXIT_CODE. Stopping pod..."
