@@ -175,6 +175,7 @@ class IllustMetricLearningModule(L.LightningModule):
 
         # Log all metrics
         self.log_dict(log_dict("train", output, total_loss), batch_size=batch.image.shape[0])
+        self._log_temperatures()
 
         return total_loss
 
@@ -345,24 +346,19 @@ class IllustMetricLearningModule(L.LightningModule):
 
         return metrics
 
-    def on_validation_start(self):
-        # Log temperature values
+    def _log_temperatures(self):
         if "tag" in self.hparams.tasks:
-            tag_temp = self.model.tag_temp.squeeze()
-            self.log("model/tag/temperature", tag_temp.mean().item())
-            self.logger.experiment.add_histogram("model/tag/temperature_hist", tag_temp, global_step=self.global_step)
+            tag_temp = self.model.tag_temp
+            self.log("model/tag/temperature", tag_temp)
+            # self.logger.experiment.add_histogram("model/tag/temperature_hist", tag_temp, global_step=self.global_step)
         if "artist" in self.hparams.tasks:
-            artist_temp = self.model.artist_temp.squeeze()
-            self.log("model/artist/temperature", artist_temp.mean().item())
-            self.logger.experiment.add_histogram(
-                "model/artist/temperature_hist", artist_temp, global_step=self.global_step
-            )
+            artist_temp = self.model.artist_temp
+            self.log("model/artist/temperature", artist_temp)
+            # self.logger.experiment.add_histogram("model/artist/temperature_hist", artist_temp, global_step=self.global_step)
         if "character" in self.hparams.tasks:
-            character_temp = self.model.character_temp.squeeze()
-            self.log("model/character/temperature", character_temp.mean().item())
-            self.logger.experiment.add_histogram(
-                "model/character/temperature_hist", character_temp, global_step=self.global_step
-            )
+            character_temp = self.model.character_temp
+            self.log("model/character/temperature", character_temp)
+            # self.logger.experiment.add_histogram("model/character/temperature_hist", character_temp, global_step=self.global_step)
 
     def on_validation_epoch_end(self):
         stage = "val"

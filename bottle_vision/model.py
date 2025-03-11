@@ -72,7 +72,8 @@ class IllustEmbeddingModel(nn.Module):
                 self.tag_head = nn.Linear(self.hidden_dim, tag_embed_dim, bias=False)
                 nn.init.orthogonal_(self.tag_head.weight)
             self.tag_prototypes = nn.Parameter(torch.randn(num_tags, tag_embed_dim))
-            self.tag_temp = nn.Parameter(torch.ones(1, num_tags) * tag_temp)
+            # self.tag_temp = nn.Parameter(torch.ones(1, num_tags) * tag_temp)
+            self.tag_temp = nn.Parameter(torch.tensor(tag_temp))
 
         if "character" in tasks:
             if character_embed_dim == self.hidden_dim and "artist" not in tasks:
@@ -82,13 +83,15 @@ class IllustEmbeddingModel(nn.Module):
                 self.character_head = nn.Linear(self.hidden_dim, character_embed_dim, bias=False)
                 nn.init.orthogonal_(self.character_head.weight)
             self.character_prototypes = nn.Parameter(torch.randn(num_characters, character_embed_dim))
-            self.character_temp = nn.Parameter(torch.ones(1, num_characters) * character_temp)
+            # self.character_temp = nn.Parameter(torch.ones(1, num_characters) * character_temp)
+            self.character_temp = nn.Parameter(torch.tensor(character_temp))
 
         if "artist" in tasks:
             self.artist_head = nn.Linear(self.hidden_dim, artist_embed_dim)
             self.artist_prototypes = nn.Parameter(torch.randn(num_artists, artist_embed_dim))
             nn.init.xavier_normal_(self.artist_prototypes)
-            self.artist_temp = nn.Parameter(torch.ones(1, num_artists) * artist_temp)
+            # self.artist_temp = nn.Parameter(torch.ones(1, num_artists) * artist_temp)
+            self.artist_temp = nn.Parameter(torch.tensor(artist_temp))
 
         if "quality" in tasks:
             self.quality_head = nn.Linear(self.hidden_dim, 1)

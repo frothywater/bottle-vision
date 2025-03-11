@@ -9,6 +9,7 @@ trainer:
   # accumulate_grad_batches: 3 # Critical for sequential multi-task training
   max_steps: 25000
   val_check_interval: 2499 # batches
+  check_val_every_n_epoch: null
   default_root_dir: /volume/exp
   log_every_n_steps: 1
   # fast_dev_run: 3
@@ -56,15 +57,15 @@ model:
   tag_contrastive_config:
     initial_temp: 0.02
     margin: 0.0
-    central_weight: 5.0
+    central_weight: 1.0
   artist_contrastive_config:
-    initial_temp: 0.05
+    initial_temp: 0.03
     margin: 0.0
-    central_weight: 5.0
+    central_weight: 1.0
   character_contrastive_config:
-    initial_temp: 0.05
+    initial_temp: 0.03
     margin: 0.0
-    central_weight: 5.0
+    central_weight: 1.0
   base_lr: 1e-4
   backbone_lr: 1e-4
   lr_start_ratio: 0.1
