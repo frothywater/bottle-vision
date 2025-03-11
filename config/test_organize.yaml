@@ -8,7 +8,7 @@ trainer:
   gradient_clip_val: 1.0
   # accumulate_grad_batches: 3 # Critical for sequential multi-task training
   max_steps: 25000
-  val_check_interval: 5000 # batches
+  val_check_interval: 2499 # batches
   default_root_dir: /volume/exp
   log_every_n_steps: 1
   # fast_dev_run: 3
@@ -24,7 +24,7 @@ trainer:
         mode: min
         save_top_k: 3
         monitor: val/loss/total
-        every_n_train_steps: 2501
+        every_n_train_steps: 2500
         auto_insert_metric_name: false
         save_weights_only: true
     - class_path: lightning.pytorch.callbacks.ModelSummary
@@ -54,29 +54,26 @@ model:
     quality: 0.0
     ortho: 0.0
   tag_contrastive_config:
-    initial_temp: 0.1
-    margin: 0.2
-    central_weight: 1.5
+    initial_temp: 0.02
+    margin: 0.0
+    central_weight: 5.0
   artist_contrastive_config:
-    initial_temp: 0.1
-    margin: 0.2
-    central_weight: 1.5
+    initial_temp: 0.05
+    margin: 0.0
+    central_weight: 5.0
   character_contrastive_config:
-    initial_temp: 0.1
-    margin: 0.2
-    central_weight: 1.5
-  base_lr: 3e-5
-  backbone_lr: 3e-5
+    initial_temp: 0.05
+    margin: 0.0
+    central_weight: 5.0
+  base_lr: 1e-4
+  backbone_lr: 1e-4
   lr_start_ratio: 0.1
   lr_end_ratio: 0.1
   warmup_percent: 0.1
   unfreeze_schedule:
     2: 0.0
-    4: 0.20
-    6: 0.36
-    8: 0.52
-    10: 0.68
-    12: 0.84
+    4: 0.33
+    6: 0.67
   tag_dict_path: ../danbooru2023/train/tag_indices_full.json
   artist_dict_path: ../danbooru2023/train/artist_indices.json
   character_dict_path: ../danbooru2023/train/character_indices_full.json
