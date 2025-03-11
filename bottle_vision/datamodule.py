@@ -3,7 +3,6 @@ from typing import Optional
 
 import lightning as L
 import torch
-import torchvision.transforms.v2 as T
 from torch.utils.data import DataLoader
 
 from .batch_sampler import BalancedClassBatchSampler, InterleavedBatchSampler

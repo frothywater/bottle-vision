@@ -11,17 +11,23 @@ from torchmetrics import AveragePrecision, MetricCollection, PrecisionRecallCurv
 
 from bottle_vision.dataset import IllustDatasetItem
 
-from .losses import ContrastiveLossConfig, ContrastiveLossParams, LossComponents, LossWeights
+from .losses import ContrastiveLossConfig, ContrastiveLossParams, LossWeights
 from .model import IllustEmbeddingModel, ModelOutput
 
 logger = logging.getLogger("bottle_vision")
 
 
-def log_dict(stage: str, losses: LossComponents, total_loss: torch.Tensor) -> dict[str, torch.Tensor]:
+def log_dict(stage: str, output: ModelOutput, total_loss: torch.Tensor) -> dict[str, torch.Tensor]:
     result = {f"{stage}/loss/total": total_loss}
-    for key, value in losses.__dict__.items():
+    for key, value in output.losses.__dict__.items():
         if isinstance(value, torch.Tensor):
             result[f"{stage}/loss/{key}"] = value
+
+    for key, value in output.contrast_loss_stats.items():
+        result[f"{stage}/loss/{key}/contrast"] = value
+    for key, value in output.central_loss_stats.items():
+        result[f"{stage}/loss/{key}/central"] = value
+
     return result
 
 
@@ -168,7 +174,7 @@ class IllustMetricLearningModule(L.LightningModule):
             total_loss /= self.trainer.accumulate_grad_batches
 
         # Log all metrics
-        self.log_dict(log_dict("train", output.losses, total_loss), batch_size=batch.image.shape[0])
+        self.log_dict(log_dict("train", output, total_loss), batch_size=batch.image.shape[0])
 
         return total_loss
 
@@ -206,7 +212,7 @@ class IllustMetricLearningModule(L.LightningModule):
         total_loss = output.losses.weighted_sum(self.hparams.loss_weights)
 
         # Log all metrics
-        self.log_dict(log_dict("val", output.losses, total_loss), batch_size=batch.image.shape[0])
+        self.log_dict(log_dict("val", output, total_loss), batch_size=batch.image.shape[0])
 
         # Update metrics for the task
         for task, prob_preds in output.prob_preds.items():
@@ -339,22 +345,35 @@ class IllustMetricLearningModule(L.LightningModule):
 
         return metrics
 
-    def on_validation_epoch_end(self):
-        self._shared_epoch_end("val", self.val_metrics)
+    def on_validation_start(self):
+        # Log temperature values
+        if "tag" in self.hparams.tasks:
+            tag_temp = self.model.tag_temp.squeeze()
+            self.log("model/tag/temperature", tag_temp.mean().item())
+            self.logger.experiment.add_histogram("model/tag/temperature_hist", tag_temp, global_step=self.global_step)
+        if "artist" in self.hparams.tasks:
+            artist_temp = self.model.artist_temp.squeeze()
+            self.log("model/artist/temperature", artist_temp.mean().item())
+            self.logger.experiment.add_histogram(
+                "model/artist/temperature_hist", artist_temp, global_step=self.global_step
+            )
+        if "character" in self.hparams.tasks:
+            character_temp = self.model.character_temp.squeeze()
+            self.log("model/character/temperature", character_temp.mean().item())
+            self.logger.experiment.add_histogram(
+                "model/character/temperature_hist", character_temp, global_step=self.global_step
+            )
 
-    def _shared_epoch_end(self, stage: str, metrics: dict[str, MetricCollection]):
-        """Shared logic for validation and test epoch end.
-        Args:
-            stage: "val" or "test"
-            metrics: metrics dict to compute from
-        """
+    def on_validation_epoch_end(self):
+        stage = "val"
+
         # Process metrics for each task
         for task, bins in [("tag", self.tag_bins), ("artist", self.artist_bins), ("character", self.character_bins)]:
             if task not in self.hparams.tasks:
                 continue
 
             # Get overall MAP and per-class AP scores
-            metric_collection = metrics[task]
+            metric_collection = self.val_metrics[task]
             overall_map = metric_collection[f"{stage}_{task}_map"].compute()
             ap_scores = metric_collection[f"{stage}_{task}_ap_per_class"].compute()
             precision, recall, _ = metric_collection[f"{stage}_{task}_prc"].compute()

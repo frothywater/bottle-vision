@@ -126,4 +126,6 @@ def central_contrastive_loss(
     # average over positive labels
     loss = loss.sum(dim=1) / (labels.sum(dim=1) + eps)
     # average over samples
-    return loss.mean()
+    loss = loss.mean()
+
+    return loss, contrast_loss, central_loss

@@ -14,8 +14,10 @@ logger = logging.getLogger("bottle_vision")
 
 @dataclass
 class ModelOutput:
-    sim_preds: torch.Tensor | dict[str, torch.Tensor]
+    prob_preds: torch.Tensor | dict[str, torch.Tensor]
     losses: LossComponents
+    contrast_loss_stats: dict[str, torch.Tensor]
+    central_loss_stats: dict[str, torch.Tensor]
 
 
 class IllustEmbeddingModel(nn.Module):
@@ -114,7 +116,7 @@ class IllustEmbeddingModel(nn.Module):
         features = self.backbone(x)
 
         # Compute task-specific outputs
-        sim_preds, task_loss = self._compute_task_output(
+        prob_preds, task_loss, contrast_loss, central_loss = self._compute_task_output(
             features=features,
             labels=labels,
             task=task,
@@ -133,7 +135,12 @@ class IllustEmbeddingModel(nn.Module):
         if "artist" in self.tasks:
             losses.ortho = self._compute_ortho_loss(task)
 
-        return ModelOutput(sim_preds=sim_preds, losses=losses)
+        return ModelOutput(
+            prob_preds=prob_preds,
+            losses=losses,
+            contrast_loss_stats={task: contrast_loss},
+            central_loss_stats={task: central_loss},
+        )
 
     def _compute_task_output(
         self,
@@ -168,7 +175,7 @@ class IllustEmbeddingModel(nn.Module):
         probs = torch.sigmoid(similarities)
 
         # Compute loss with class weights
-        loss = central_contrastive_loss(
+        loss, contrast_loss, central_loss = central_contrastive_loss(
             sim=similarities,
             labels=labels,
             temp=temp,
@@ -178,7 +185,7 @@ class IllustEmbeddingModel(nn.Module):
             class_weights=class_weights,
         )
 
-        return torch.sigmoid(similarities), loss
+        return probs, loss, contrast_loss, central_loss
 
     def forward_all_tasks(
         self,
@@ -195,9 +202,11 @@ class IllustEmbeddingModel(nn.Module):
 
         # Compute task-specific outputs
         prob_preds = {}
+        contrast_loss_stats = {}
+        central_loss_stats = {}
         losses = LossComponents()
         for task, labels in labels.items():
-            task_sim_preds, task_loss = self._compute_task_output(
+            task_prob_preds, task_loss, contrast_loss, central_loss = self._compute_task_output(
                 features=features,
                 labels=labels,
                 task=task,
@@ -206,6 +215,8 @@ class IllustEmbeddingModel(nn.Module):
                 class_weights=class_weights.get(task),
             )
             prob_preds[task] = task_prob_preds
+            contrast_loss_stats[task] = contrast_loss
+            central_loss_stats[task] = central_loss
             losses.__setattr__(task, task_loss)
 
         # Compute quality loss
@@ -217,7 +228,12 @@ class IllustEmbeddingModel(nn.Module):
         if "artist" in self.tasks:
             losses.ortho = self._compute_ortho_loss("artist")
 
-        return ModelOutput(sim_preds=sim_preds, losses=losses)
+        return ModelOutput(
+            prob_preds=prob_preds,
+            losses=losses,
+            contrast_loss_stats=contrast_loss_stats,
+            central_loss_stats=central_loss_stats,
+        )
 
     def _compute_ortho_loss(self, task: str) -> torch.Tensor:
         """Compute orthogonality loss between embedding spaces based on task."""
