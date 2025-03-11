@@ -93,6 +93,11 @@ class IllustMetricLearningModule(L.LightningModule):
         self.artist_freqs = self._get_class_frequencies(artist_dict_path)
         self.character_freqs = self._get_class_frequencies(character_dict_path)
 
+        # Get class weights
+        self.tag_weights = self._get_class_weights(self.tag_freqs)
+        self.artist_weights = self._get_class_weights(self.artist_freqs)
+        self.character_weights = self._get_class_weights(self.character_freqs)
+
         # Get frequency bins
         self.tag_bins = self._get_frequency_bins(self.tag_freqs, num_freq_bins)
         self.artist_bins = self._get_frequency_bins(self.artist_freqs, num_freq_bins)
@@ -117,6 +122,10 @@ class IllustMetricLearningModule(L.LightningModule):
         freqs = torch.tensor([len(indices) for indices in indices_dict.values()])
         return freqs
 
+    def _get_class_weights(self, freqs: torch.Tensor, alpha: float = 0.5, eps: float = 1e-4) -> torch.Tensor:
+        freqs = freqs / freqs.sum()
+        return (freqs + eps) ** -alpha
+
     def _get_frequency_bins(self, freqs: torch.Tensor, num_freq_bins: int) -> list[torch.Tensor]:
         """Split classes into several frequency bins."""
         # Calculate log frequencies
@@ -138,6 +147,11 @@ class IllustMetricLearningModule(L.LightningModule):
     def training_step(self, batch: IllustDatasetItem, batch_idx: int):
         task = batch.task[0]
         params = ContrastiveLossParams.from_config(self.hparams[f"{task}_contrastive_config"])
+        class_weights = self.__getattribute__(f"{task}_weights")
+        if class_weights.device != batch.image.device:
+            class_weights = class_weights.to(batch.image.device)
+            self.__setattr__(f"{task}_weights", class_weights)
+
         output: ModelOutput = self.model.forward_task(
             x=batch.image,
             task=task,
@@ -145,6 +159,7 @@ class IllustMetricLearningModule(L.LightningModule):
             masks=batch.__getattribute__(f"{task}_mask"),
             score=batch.score,
             contrastive_params=params,
+            class_weights=class_weights,
         )
 
         # Compute total loss
@@ -161,18 +176,22 @@ class IllustMetricLearningModule(L.LightningModule):
         labels = {}
         masks = {}
         params = {}
+        class_weights = {}
         if batch.tag_label is not None and "tag" in self.hparams.tasks:
             labels["tag"] = batch.tag_label
             masks["tag"] = batch.tag_mask
             params["tag"] = ContrastiveLossParams.from_config(self.hparams.tag_contrastive_config)
+            class_weights["tag"] = self.tag_weights
         if batch.artist_label is not None and "artist" in self.hparams.tasks:
             labels["artist"] = batch.artist_label
             masks["artist"] = batch.artist_mask
             params["artist"] = ContrastiveLossParams.from_config(self.hparams.artist_contrastive_config)
+            class_weights["artist"] = self.artist_weights
         if batch.character_label is not None and "character" in self.hparams.tasks:
             labels["character"] = batch.character_label
             masks["character"] = batch.character_mask
             params["character"] = ContrastiveLossParams.from_config(self.hparams.character_contrastive_config)
+            class_weights["character"] = self.character_weights
 
         # Forward for all tasks
         output: ModelOutput = self.model.forward_all_tasks(
@@ -190,11 +209,11 @@ class IllustMetricLearningModule(L.LightningModule):
         self.log_dict(log_dict("val", output.losses, total_loss), batch_size=batch.image.shape[0])
 
         # Update metrics for the task
-        for task, sim_preds in output.sim_preds.items():
+        for task, prob_preds in output.prob_preds.items():
             mask = masks[task]
             if mask.sum() == 0:
                 continue
-            sim_preds = sim_preds[mask]
+            prob_preds = prob_preds[mask]
             # Convert float to long (due to label smoothing)
             label = labels[task][mask].round().long()
 
@@ -202,7 +221,7 @@ class IllustMetricLearningModule(L.LightningModule):
             if task == "artist":
                 label = label.argmax(dim=1)
 
-            self.val_metrics[task].update(sim_preds, label)
+            self.val_metrics[task].update(prob_preds, label)
 
         return total_loss
 

@@ -57,6 +57,9 @@ def central_contrastive_loss(
     eps: float = 1e-6,
     max_exp_value: float = 30.0,
     mask: torch.Tensor = None,
+    focal_gamma: float = 2.0,
+    class_weights: torch.Tensor = None,
+    prob_preds: torch.Tensor = None,
 ) -> torch.Tensor:
     """Central contrastive loss adapted for multi-label supervised case with class weights.
 
@@ -97,15 +100,29 @@ def central_contrastive_loss(
 
     # positive samples
     positives = torch.exp(torch.clamp(sim_div - shift - params.margin / temp, max=max_exp_value)) * labels
+    # focal modulation
+    if prob_preds is not None:
+        positives *= (1 - prob_preds) ** focal_gamma
 
     # log ratio, mask out negative samples
     ratio = positives / (positives + negatives + eps)
-    log_ratio = torch.log(ratio + eps) * labels
+    contrast_loss = -torch.log(ratio + eps) * labels
 
     # central loss: minimize distance between positive samples and their centroids
-    central_loss = 2 * sim * labels
+    central_loss = -2 * sim * labels
 
-    loss = -(log_ratio + params.central_weight * central_loss)
+    loss = contrast_loss + params.central_weight * central_loss
+    # return each part of the raw loss for monitoring
+    label_sum = labels.sum(dim=1) + eps
+    contrast_loss = (contrast_loss.sum(dim=1) / label_sum).mean()
+    central_loss = (central_loss.sum(dim=1) / label_sum).mean()
+
+    # reweight positive samples based on class weights
+    if class_weights is not None:
+        positive_mask = labels.round().bool()
+        loss = torch.where(positive_mask, loss * class_weights, loss)
+        labels = torch.where(positive_mask, labels * class_weights, labels)
+
     # average over positive labels
     loss = loss.sum(dim=1) / (labels.sum(dim=1) + eps)
     # average over samples

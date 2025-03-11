@@ -107,6 +107,7 @@ class IllustEmbeddingModel(nn.Module):
         task: str,
         contrastive_params: ContrastiveLossParams,
         masks: Optional[torch.Tensor] = None,
+        class_weights: Optional[torch.Tensor] = None,
     ) -> ModelOutput:
         """Forward pass for a specific task."""
         # Get backbone features
@@ -119,6 +120,7 @@ class IllustEmbeddingModel(nn.Module):
             task=task,
             contrastive_params=contrastive_params,
             masks=masks,
+            class_weights=class_weights,
         )
         losses = LossComponents(**{task: task_loss})
 
@@ -140,6 +142,7 @@ class IllustEmbeddingModel(nn.Module):
         task: str,
         contrastive_params: ContrastiveLossParams,
         masks: Optional[torch.Tensor] = None,
+        class_weights: Optional[torch.Tensor] = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Compute similarities and loss for a specific task."""
         # Select appropriate head and prototypes based on task
@@ -162,6 +165,7 @@ class IllustEmbeddingModel(nn.Module):
         # Compute embeddings and similarities
         embeddings = self.dropout(head(features))
         similarities = F.normalize(embeddings, dim=1) @ F.normalize(prototypes, dim=1).T
+        probs = torch.sigmoid(similarities)
 
         # Compute loss with class weights
         loss = central_contrastive_loss(
@@ -170,6 +174,8 @@ class IllustEmbeddingModel(nn.Module):
             temp=temp,
             params=contrastive_params,
             mask=masks,
+            # prob_preds=probs,
+            class_weights=class_weights,
         )
 
         return torch.sigmoid(similarities), loss
@@ -181,13 +187,14 @@ class IllustEmbeddingModel(nn.Module):
         score: torch.Tensor,
         contrastive_params: dict[str, ContrastiveLossParams],
         masks: dict[str, torch.Tensor] = {},
+        class_weights: dict[str, torch.Tensor] = {},
     ) -> ModelOutput:
         """Forward pass for all tasks, used in validation/test."""
         # Get backbone features
         features = self.backbone(x)
 
         # Compute task-specific outputs
-        sim_preds = {}
+        prob_preds = {}
         losses = LossComponents()
         for task, labels in labels.items():
             task_sim_preds, task_loss = self._compute_task_output(
@@ -196,8 +203,9 @@ class IllustEmbeddingModel(nn.Module):
                 task=task,
                 contrastive_params=contrastive_params[task],
                 masks=masks.get(task),
+                class_weights=class_weights.get(task),
             )
-            sim_preds[task] = task_sim_preds
+            prob_preds[task] = task_prob_preds
             losses.__setattr__(task, task_loss)
 
         # Compute quality loss
