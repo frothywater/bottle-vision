@@ -1,6 +1,7 @@
 import json
 import logging
 from functools import partial
+from typing import Literal
 
 import lightning as L
 import matplotlib.pyplot as plt
@@ -69,6 +70,7 @@ class IllustMetricLearningModule(L.LightningModule):
         tag_contrastive_config: ContrastiveLossConfig = ContrastiveLossConfig(),
         artist_contrastive_config: ContrastiveLossConfig = ContrastiveLossConfig(),
         character_contrastive_config: ContrastiveLossConfig = ContrastiveLossConfig(),
+        temp_strategy: Literal["fixed", "task", "class"] = "fixed",
         # metric
         num_freq_bins: int = 5,
     ):
@@ -88,10 +90,11 @@ class IllustMetricLearningModule(L.LightningModule):
             cls_token=cls_token,
             reg_tokens=reg_tokens,
             dropout=dropout,
-            tag_temp=tag_contrastive_config["initial_temp"],
-            artist_temp=artist_contrastive_config["initial_temp"],
-            character_temp=character_contrastive_config["initial_temp"],
+            tag_temp=tag_contrastive_config["temp"],
+            artist_temp=artist_contrastive_config["temp"],
+            character_temp=character_contrastive_config["temp"],
             tasks=tasks,
+            temp_strategy=temp_strategy,
         )
 
         # Load and process class frequencies
@@ -348,17 +351,29 @@ class IllustMetricLearningModule(L.LightningModule):
 
     def _log_temperatures(self):
         if "tag" in self.hparams.tasks:
-            tag_temp = self.model.tag_temp
-            self.log("model/tag/temperature", tag_temp)
-            # self.logger.experiment.add_histogram("model/tag/temperature_hist", tag_temp, global_step=self.global_step)
+            if self.hparams.temp_strategy != "class":
+                self.log("model/tag/temperature", self.model.tag_temp)
+            else:
+                self.log("model/tag/temperature", self.model.tag_temp.mean())
+                self.logger.experiment.add_histogram(
+                    "model/tag/temperature_hist", self.model.tag_temp, global_step=self.global_step
+                )
         if "artist" in self.hparams.tasks:
-            artist_temp = self.model.artist_temp
-            self.log("model/artist/temperature", artist_temp)
-            # self.logger.experiment.add_histogram("model/artist/temperature_hist", artist_temp, global_step=self.global_step)
+            if self.hparams.temp_strategy != "class":
+                self.log("model/artist/temperature", self.model.artist_temp)
+            else:
+                self.log("model/artist/temperature", self.model.artist_temp.mean())
+                self.logger.experiment.add_histogram(
+                    "model/artist/temperature_hist", self.model.artist_temp, global_step=self.global_step
+                )
         if "character" in self.hparams.tasks:
-            character_temp = self.model.character_temp
-            self.log("model/character/temperature", character_temp)
-            # self.logger.experiment.add_histogram("model/character/temperature_hist", character_temp, global_step=self.global_step)
+            if self.hparams.temp_strategy != "class":
+                self.log("model/character/temperature", self.model.character_temp)
+            else:
+                self.log("model/character/temperature", self.model.character_temp.mean())
+                self.logger.experiment.add_histogram(
+                    "model/character/temperature_hist", self.model.character_temp, global_step=self.global_step
+                )
 
     def on_validation_epoch_end(self):
         stage = "val"

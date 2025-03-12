@@ -53,15 +53,15 @@ model:
     quality: 0.2
     ortho: 0.5
   tag_contrastive_config:
-    initial_temp: 0.05
+    temp: 0.05
     margin: 0.2
     central_weight: 1.5
   artist_contrastive_config:
-    initial_temp: 0.1
+    temp: 0.1
     margin: 0.2
     central_weight: 1.5
   character_contrastive_config:
-    initial_temp: 0.05
+    temp: 0.05
     margin: 0.2
     central_weight: 1.5
   base_lr: 4e-4

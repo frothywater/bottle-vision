@@ -1,6 +1,6 @@
 import logging
 from dataclasses import dataclass
-from typing import Optional
+from typing import Literal, Optional
 
 import timm
 import torch
@@ -44,6 +44,7 @@ class IllustEmbeddingModel(nn.Module):
         artist_temp: float,
         character_temp: float,
         tasks: list[str],
+        temp_strategy: Literal["fixed", "task", "class"],
     ):
         super().__init__()
         self.tasks = tasks
@@ -72,8 +73,7 @@ class IllustEmbeddingModel(nn.Module):
                 self.tag_head = nn.Linear(self.hidden_dim, tag_embed_dim, bias=False)
                 nn.init.orthogonal_(self.tag_head.weight)
             self.tag_prototypes = nn.Parameter(torch.randn(num_tags, tag_embed_dim))
-            # self.tag_temp = nn.Parameter(torch.ones(1, num_tags) * tag_temp)
-            self.tag_temp = nn.Parameter(torch.tensor(tag_temp))
+            self.tag_temp = self._make_temp(tag_temp, temp_strategy, num_tags)
 
         if "character" in tasks:
             if character_embed_dim == self.hidden_dim and "artist" not in tasks:
@@ -83,18 +83,26 @@ class IllustEmbeddingModel(nn.Module):
                 self.character_head = nn.Linear(self.hidden_dim, character_embed_dim, bias=False)
                 nn.init.orthogonal_(self.character_head.weight)
             self.character_prototypes = nn.Parameter(torch.randn(num_characters, character_embed_dim))
-            # self.character_temp = nn.Parameter(torch.ones(1, num_characters) * character_temp)
-            self.character_temp = nn.Parameter(torch.tensor(character_temp))
+            self.character_temp = self._make_temp(character_temp, temp_strategy, num_characters)
 
         if "artist" in tasks:
             self.artist_head = nn.Linear(self.hidden_dim, artist_embed_dim)
             self.artist_prototypes = nn.Parameter(torch.randn(num_artists, artist_embed_dim))
             nn.init.xavier_normal_(self.artist_prototypes)
-            # self.artist_temp = nn.Parameter(torch.ones(1, num_artists) * artist_temp)
-            self.artist_temp = nn.Parameter(torch.tensor(artist_temp))
+            self.artist_temp = self._make_temp(artist_temp, temp_strategy, num_artists)
 
         if "quality" in tasks:
             self.quality_head = nn.Linear(self.hidden_dim, 1)
+
+    def _make_temp(self, temp: float, strategy: Literal["fixed", "task", "class"], num_classes: int = None):
+        if strategy == "fixed":
+            return temp
+        elif strategy == "task":
+            return nn.Parameter(torch.tensor(temp))
+        elif strategy == "class":
+            return nn.Parameter(torch.ones(1, num_classes) * temp)
+        else:
+            raise ValueError(f"Unknown temperature strategy: {strategy}")
 
     def forward(self, x: torch.Tensor):
         features = self.backbone(x)

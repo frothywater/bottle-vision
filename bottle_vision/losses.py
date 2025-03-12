@@ -5,7 +5,7 @@ import torch
 
 
 class ContrastiveLossConfig(TypedDict):
-    initial_temp: float = 0.1
+    temp: float = 0.1
     margin: float = 0.2
     central_weight: float = 1.5
 

@@ -1,23 +1,15 @@
 seed_everything: 42
 trainer:
-  # accelerator: mps
   accelerator: auto
   devices: 1
   precision: bf16-mixed # Enable mixed precision training
-  # precision: 32
   gradient_clip_val: 1.0
-  # accumulate_grad_batches: 3 # Critical for sequential multi-task training
+  # accumulate_grad_batches: 3
   max_steps: 25000
   val_check_interval: 2499 # batches
   check_val_every_n_epoch: null
   default_root_dir: /volume/exp
   log_every_n_steps: 1
-  # fast_dev_run: 3
-  # num_sanity_val_steps: 3
-  # limit_val_batches: 1000
-  # enable_progress_bar: false
-  # profiler:
-  #   class_path: lightning.pytorch.profilers.PyTorchProfiler
   callbacks:
     - class_path: lightning.pytorch.callbacks.ModelCheckpoint
       init_args:
@@ -34,7 +26,6 @@ trainer:
     - class_path: lightning.pytorch.callbacks.LearningRateMonitor
       init_args:
         logging_interval: step
-    # - class_path: lightning.pytorch.callbacks.DeviceStatsMonitor
 
 model:
   num_tags: 8110
@@ -54,16 +45,17 @@ model:
     character: 1.0
     quality: 0.0
     ortho: 0.0
+  temp_strategy: fixed
   tag_contrastive_config:
-    initial_temp: 0.02
+    temp: 0.02
     margin: 0.0
     central_weight: 1.0
   artist_contrastive_config:
-    initial_temp: 0.03
+    temp: 0.05
     margin: 0.0
     central_weight: 1.0
   character_contrastive_config:
-    initial_temp: 0.03
+    temp: 0.05
     margin: 0.0
     central_weight: 1.0
   base_lr: 1e-4
@@ -87,7 +79,7 @@ data:
   samples_per_class: 4
   num_workers: 16
   image_size: 448
-  label_smoothing_eps: 0.1
+  label_smoothing_eps: 0.0
   tasks: [tag, character]
   task_probs:
     tag: 0.75
