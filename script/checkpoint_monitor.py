@@ -9,7 +9,7 @@ from watchdog.observers import Observer
 
 class CheckpointHandler(PatternMatchingEventHandler):
     def __init__(self, s3_client, bucket, **kwargs):
-        super().__init__(patterns=["*.ckpt", "events.*"], **kwargs)
+        super().__init__(patterns=["*.ckpt"], **kwargs)
         self.s3_client = s3_client
         self.bucket = bucket
 
@@ -50,7 +50,7 @@ def monitor_checkpoints(path_to_monitor):
     observer = Observer()
     observer.schedule(event_handler, path=path_to_monitor, recursive=True)
     observer.start()
-    print(f"Started monitoring {path_to_monitor} for checkpoint and event files.")
+    print(f"Started monitoring {path_to_monitor} for checkpoint files.")
 
     # Keep the script running until interrupted
     try:
