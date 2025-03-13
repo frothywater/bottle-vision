@@ -9,6 +9,11 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torchmetrics import AveragePrecision, MetricCollection, PrecisionRecallCurve
+from torchmetrics.classification import (
+    MultilabelRankingAveragePrecision,
+    MultilabelRankingLoss,
+    MultilabelCoverageError,
+)
 
 from bottle_vision.dataset import IllustDatasetItem
 
@@ -328,24 +333,28 @@ class IllustMetricLearningModule(L.LightningModule):
             metric_type = "multiclass" if task == "artist" else "multilabel"
             kwargs = {"num_classes": num_classes} if metric_type == "multiclass" else {"num_labels": num_classes}
             # `MetricCollection` to share underlying computation
-            metrics[task] = MetricCollection(
-                {
-                    f"{prefix}_{task}_map": AveragePrecision(
-                        task=metric_type, thresholds=thresholds, average="macro", **kwargs
-                    ),
-                    f"{prefix}_{task}_ap_per_class": AveragePrecision(
-                        task=metric_type,
-                        thresholds=thresholds,
-                        average=None,  # Returns per-class scores
-                        **kwargs,
-                    ),
-                    f"{prefix}_{task}_prc": PrecisionRecallCurve(
-                        task=metric_type,
-                        thresholds=thresholds,
-                        **kwargs,
-                    ),
-                }
-            )
+            collection = {
+                f"{prefix}_{task}_map": AveragePrecision(
+                    task=metric_type, thresholds=thresholds, average="macro", **kwargs
+                ),
+                f"{prefix}_{task}_ap_per_class": AveragePrecision(
+                    task=metric_type,
+                    thresholds=thresholds,
+                    average=None,  # Returns per-class scores
+                    **kwargs,
+                ),
+                f"{prefix}_{task}_prc": PrecisionRecallCurve(
+                    task=metric_type,
+                    thresholds=thresholds,
+                    **kwargs,
+                ),
+            }
+            if metric_type == "multilabel":
+                collection[f"{prefix}_{task}_ranking_ap"] = MultilabelRankingAveragePrecision(**kwargs)
+                collection[f"{prefix}_{task}_ranking_loss"] = MultilabelRankingLoss(**kwargs)
+                collection[f"{prefix}_{task}_coverage_error"] = MultilabelCoverageError(**kwargs)
+
+            metrics[task] = MetricCollection(collection)
 
         return metrics
 
@@ -389,8 +398,15 @@ class IllustMetricLearningModule(L.LightningModule):
             ap_scores = metric_collection[f"{stage}_{task}_ap_per_class"].compute()
             precision, recall, _ = metric_collection[f"{stage}_{task}_prc"].compute()
 
-            # Log overall MAP
+            ranking_ap = metric_collection[f"{stage}_{task}_ranking_ap"].compute()
+            ranking_loss = metric_collection[f"{stage}_{task}_ranking_loss"].compute()
+            coverage_error = metric_collection[f"{stage}_{task}_coverage_error"].compute()
+
+            # Log overall scalar metrics
             self.log(f"{stage}/metric/{task}/map/overall", overall_map)
+            self.log(f"{stage}/metric/{task}/ranking_ap", ranking_ap)
+            self.log(f"{stage}/metric/{task}/ranking_loss", ranking_loss)
+            self.log(f"{stage}/metric/{task}/coverage_error", coverage_error)
 
             # Log AP distribution
             self.logger.experiment.add_histogram(f"{stage}/{task}/ap_dist", ap_scores, global_step=self.global_step)
