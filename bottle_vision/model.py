@@ -183,7 +183,7 @@ class IllustEmbeddingModel(nn.Module):
         # Compute embeddings and similarities
         embeddings = self.dropout(head(features))
         similarities = F.normalize(embeddings, dim=1) @ F.normalize(prototypes, dim=1).T
-        probs = torch.sigmoid(similarities)
+        probs = torch.sigmoid(similarities / temp)
 
         # Compute loss with class weights
         loss, contrast_loss, central_loss = central_contrastive_loss(
