@@ -1,7 +1,7 @@
 import json
 import logging
 from functools import partial
-from typing import Literal
+from typing import Literal, Optional
 
 import lightning as L
 import matplotlib.pyplot as plt
@@ -70,6 +70,7 @@ class IllustMetricLearningModule(L.LightningModule):
         lr_end_ratio: float = 0.1,
         warmup_percent: float = 0.05,
         unfreeze_schedule: dict[int, float] = {4: 0.33, 12: 0.67},
+        weight_path: Optional[str] = None,
         # loss
         loss_weights: LossWeights = LossWeights(),
         tag_contrastive_config: ContrastiveLossConfig = ContrastiveLossConfig(),
@@ -302,6 +303,11 @@ class IllustMetricLearningModule(L.LightningModule):
     def on_fit_start(self):
         if self.trainer.ckpt_path is not None:
             logger.info(f"Loaded checkpoint from {self.trainer.ckpt_path}")
+        elif self.hparams.weight_path is not None:
+            state_dict = torch.load(self.hparams.weight_path)["state_dict"]
+            self.model.load_state_dict(state_dict)
+            keys = [k.removeprefix("model._orig_mod.") for k in state_dict.keys() if "backbone" not in k]
+            logger.info(f"Loaded weights from {self.hparams.weight_path}, keys: {keys}")
         else:
             # Load pretrained weights
             self.model.load_wd_tagger_weights(self.hparams.num_tags, self.hparams.num_characters)
