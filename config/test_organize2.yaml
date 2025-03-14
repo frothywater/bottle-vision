@@ -78,7 +78,7 @@ data:
   num_workers: 32
   image_size: 448
   label_smoothing_eps: 0.1
-  tasks: [tag, character]
+  data_tasks: [tag, character]
   sample_cutoff: 24
   task_probs:
     tag: 0.75

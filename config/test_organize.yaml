@@ -78,7 +78,7 @@ data:
   num_workers: 32
   image_size: 448
   label_smoothing_eps: 0.1
-  tasks: [tag, character]
+  data_tasks: [tag, character]
   sample_cutoff: 24
   train_parquet_path: ../danbooru2023/train/images.parquet
   train_tar_dir: ../danbooru2023/train

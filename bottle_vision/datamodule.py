@@ -22,7 +22,7 @@ class IllustDataModule(L.LightningDataModule):
         num_tags: int,
         num_artists: int,
         num_characters: int,
-        tasks: list[str],
+        data_tasks: list[str],
         num_workers: int = 4,
         prefetch_factor: Optional[int] = None,
         image_size: int = 448,
@@ -54,15 +54,15 @@ class IllustDataModule(L.LightningDataModule):
 
     def train_dataloader(self):
         task_dicts = {}
-        if "tag" in self.hparams.tasks:
+        if "tag" in self.hparams.data_tasks:
             with open(self.hparams.train_tag_dict_path) as f:
                 tag_dict = json.load(f)
             task_dicts["tag"] = tag_dict
-        if "artist" in self.hparams.tasks:
+        if "artist" in self.hparams.data_tasks:
             with open(self.hparams.train_artist_dict_path) as f:
                 artist_dict = json.load(f)
             task_dicts["artist"] = artist_dict
-        if "character" in self.hparams.tasks:
+        if "character" in self.hparams.data_tasks:
             with open(self.hparams.train_character_dict_path) as f:
                 character_dict = json.load(f)
             task_dicts["character"] = character_dict
@@ -114,7 +114,7 @@ class IllustDataModule(L.LightningDataModule):
             num_tags=self.hparams.num_tags,
             num_artists=self.hparams.num_artists,
             num_characters=self.hparams.num_characters,
-            tasks=self.hparams.tasks,
+            tasks=self.hparams.data_tasks,
             image_size=self.hparams.image_size,
             mean=self.hparams.mean,
             std=self.hparams.std,

@@ -305,9 +305,16 @@ class IllustMetricLearningModule(L.LightningModule):
             logger.info(f"Loaded checkpoint from {self.trainer.ckpt_path}")
         elif self.hparams.weight_path is not None:
             state_dict = torch.load(self.hparams.weight_path)["state_dict"]
-            self.model.load_state_dict(state_dict)
-            keys = [k.removeprefix("model._orig_mod.") for k in state_dict.keys() if "backbone" not in k]
-            logger.info(f"Loaded weights from {self.hparams.weight_path}, keys: {keys}")
+            state_dict = {k.removeprefix("model."): v for k, v in state_dict.items()}
+            keys = [k for k in state_dict.keys() if "backbone" not in k]
+
+            result = self.model.load_state_dict(state_dict, strict=False)
+            logger.info(f"Loaded weights from {self.hparams.weight_path}")
+            logger.info(f"Loaded non-backbone keys: {', '.join(keys)}")
+            if result.missing_keys:
+                logger.info(f"Missing keys: {', '.join(result.missing_keys)}")
+            if result.unexpected_keys:
+                logger.info(f"Unexpected keys: {', '.join(result.unexpected_keys)}")
         else:
             # Load pretrained weights
             self.model.load_wd_tagger_weights(self.hparams.num_tags, self.hparams.num_characters)
@@ -404,15 +411,16 @@ class IllustMetricLearningModule(L.LightningModule):
             ap_scores = metric_collection[f"{stage}_{task}_ap_per_class"].compute()
             precision, recall, _ = metric_collection[f"{stage}_{task}_prc"].compute()
 
-            ranking_ap = metric_collection[f"{stage}_{task}_ranking_ap"].compute()
-            ranking_loss = metric_collection[f"{stage}_{task}_ranking_loss"].compute()
-            coverage_error = metric_collection[f"{stage}_{task}_coverage_error"].compute()
+            if task != "artist":
+                ranking_ap = metric_collection[f"{stage}_{task}_ranking_ap"].compute()
+                ranking_loss = metric_collection[f"{stage}_{task}_ranking_loss"].compute()
+                coverage_error = metric_collection[f"{stage}_{task}_coverage_error"].compute()
+                self.log(f"{stage}/metric/{task}/ranking_ap", ranking_ap)
+                self.log(f"{stage}/metric/{task}/ranking_loss", ranking_loss)
+                self.log(f"{stage}/metric/{task}/coverage_error", coverage_error)
 
             # Log overall scalar metrics
             self.log(f"{stage}/metric/{task}/map/overall", overall_map)
-            self.log(f"{stage}/metric/{task}/ranking_ap", ranking_ap)
-            self.log(f"{stage}/metric/{task}/ranking_loss", ranking_loss)
-            self.log(f"{stage}/metric/{task}/coverage_error", coverage_error)
 
             # Log AP distribution
             self.logger.experiment.add_histogram(f"{stage}/{task}/ap_dist", ap_scores, global_step=self.global_step)
