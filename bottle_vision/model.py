@@ -143,8 +143,8 @@ class IllustEmbeddingModel(nn.Module):
             losses.quality = F.mse_loss(quality_score, score)
 
         # Compute orthogonality losses
-        if "artist" in self.tasks:
-            losses.ortho = self._compute_ortho_loss(task)
+        if task == "artist":
+            losses.ortho = self._compute_ortho_loss()
 
         return ModelOutput(
             prob_preds=prob_preds,
@@ -237,7 +237,7 @@ class IllustEmbeddingModel(nn.Module):
 
         # Compute orthogonality losses
         if "artist" in self.tasks:
-            losses.ortho = self._compute_ortho_loss("artist")
+            losses.ortho = self._compute_ortho_loss()
 
         return ModelOutput(
             prob_preds=prob_preds,
@@ -246,23 +246,11 @@ class IllustEmbeddingModel(nn.Module):
             central_loss_stats=central_loss_stats,
         )
 
-    def _compute_ortho_loss(self, task: str) -> torch.Tensor:
-        """Compute orthogonality loss between embedding spaces based on task."""
-        if task == "tag":
-            # Tag embeddings should be orthogonal to artist embeddings
-            return torch.norm(self.tag_head.weight @ self.artist_head.weight.T, p="fro") ** 2
-
-        elif task == "artist":
-            # Artist embeddings should be orthogonal to tag and character embeddings
-            tag_ortho = torch.norm(self.artist_head.weight @ self.tag_head.weight.T, p="fro") ** 2
-            char_ortho = torch.norm(self.artist_head.weight @ self.character_head.weight.T, p="fro") ** 2
-            return tag_ortho + char_ortho
-
-        elif task == "character":
-            # Character embeddings should be orthogonal to artist embeddings
-            return torch.norm(self.character_head.weight @ self.artist_head.weight.T, p="fro") ** 2
-
-        raise ValueError(f"Unknown task: {task}")
+    def _compute_ortho_loss(self) -> torch.Tensor:
+        # Artist embeddings should be orthogonal to tag and character embeddings
+        tag_ortho = torch.norm(self.artist_head.weight @ self.tag_head.weight.T.detach(), p="fro") ** 2
+        char_ortho = torch.norm(self.artist_head.weight @ self.character_head.weight.T.detach(), p="fro") ** 2
+        return tag_ortho + char_ortho
 
     def load_wd_tagger_weights(self, num_tags: int, num_characters: int):
         """Load weights from WD-Tagger pretrained model."""
