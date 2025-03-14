@@ -69,7 +69,7 @@ class IllustMetricLearningModule(L.LightningModule):
         lr_start_ratio: float = 0.1,
         lr_end_ratio: float = 0.1,
         warmup_percent: float = 0.05,
-        unfreeze_schedule: dict[int, float] = {4: 0.33, 12: 0.67},
+        unfreeze_schedule: dict[int, float] = {},
         weight_path: Optional[str] = None,
         # loss
         loss_weights: LossWeights = LossWeights(),
@@ -283,7 +283,7 @@ class IllustMetricLearningModule(L.LightningModule):
 
         # Calculate learning rate schedule
         warmup_steps = int(total_steps * self.hparams.warmup_percent)
-        backbone_start_steps = min(self.step_to_unfrozen_layers.keys())
+        backbone_start_steps = min(self.step_to_unfrozen_layers.keys()) if unfreeze_schedule else total_steps
 
         # 1. parameters except for backbone: start from 0
         other_lr_fn = partial(self.lr_fn, start_steps=0, warmup_steps=warmup_steps, total_steps=total_steps)
