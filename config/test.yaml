@@ -41,7 +41,7 @@ model:
   dropout: 0.1
   tasks: [tag, character, artist, quality]
   loss_weights:
-    tag: 1.0
+    tag: 2.0
     artist: 1.0
     character: 1.0
     quality: 0.2
@@ -50,7 +50,7 @@ model:
   tag_contrastive_config:
     temp: 0.05
     margin: 0.1
-    central_weight: 1.5
+    central_weight: 1.0
   artist_contrastive_config:
     temp: 0.1
     margin: 0.0
@@ -64,7 +64,8 @@ model:
   lr_start_ratio: 0.1
   lr_end_ratio: 0.1
   warmup_percent: 0.1
-  # unfreeze_schedule:
+  unfreeze_schedule:
+    2: 0.0
   tag_dict_path: ../danbooru2023/train/tag_indices_full.json
   artist_dict_path: ../danbooru2023/train/artist_indices.json
   character_dict_path: ../danbooru2023/train/character_indices_full.json

@@ -29,7 +29,7 @@ TB_PID=$!
 
 echo "Starting training..."
 # Run the training script (assumed to be repo/train.py)
-python main.py fit --config config/test.yaml --model.weight_path ../weights/organized-tag=512-char=128.ckpt
+python main.py fit --config config/test.yaml --model.weight_path ../weights/organized-tag=512-char=128-art=128.ckpt
 TRAIN_EXIT_CODE=$?
 
 echo "Training finished with exit code $TRAIN_EXIT_CODE. Stopping pod..."
