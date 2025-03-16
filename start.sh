@@ -27,9 +27,12 @@ echo "Starting TensorBoard..."
 tensorboard --logdir=$EXP_DIR --host=0.0.0.0 --port=6006 &
 TB_PID=$!
 
+echo "Bootstrapping model weights..."
+python bootstrap_artist.py ../weights/0315-70k.ckpt ../weights/0315-70k-bootstraped.ckpt $EXP_DIR/artist_emb.pt config/train.yaml ../danbooru2023/train-400k/new_artist_random_indices.json
+
 echo "Starting training..."
 # Run the training script (assumed to be repo/train.py)
-python main.py fit --config config/test.yaml --model.weight_path ../weights/organized-tag=512-char=128-art=128.ckpt
+python main.py fit --config config/train.yaml --model.weight_path ../weights/0315-70k-bootstraped.ckpt
 TRAIN_EXIT_CODE=$?
 
 echo "Training finished with exit code $TRAIN_EXIT_CODE. Stopping pod..."
