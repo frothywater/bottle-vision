@@ -86,7 +86,7 @@ def central_contrastive_loss(
         # mask out samples with no positive labels
         # if all labels are negative, return zero loss
         if not mask.any():
-            return torch.tensor(0.0, device=sim.device)
+            return 0.0, 0.0, 0.0
         sim = sim[mask]
         labels = labels[mask]
 

@@ -50,9 +50,8 @@ class IllustMetricLearningModule(L.LightningModule):
         num_tags: int,
         num_artists: int,
         num_characters: int,
-        tag_dict_path: str,
-        artist_dict_path: str,
-        character_dict_path: str,
+        tag_freq_path: str,
+        character_freq_path: str,
         tasks: list[str],
         # model
         backbone_variant: str = "vit_base_patch16_224",
@@ -104,9 +103,9 @@ class IllustMetricLearningModule(L.LightningModule):
         )
 
         # Load and process class frequencies
-        self.tag_freqs = self._get_class_frequencies(tag_dict_path)
-        self.artist_freqs = self._get_class_frequencies(artist_dict_path)
-        self.character_freqs = self._get_class_frequencies(character_dict_path)
+        self.tag_freqs = self._get_class_frequencies(tag_freq_path)
+        self.character_freqs = self._get_class_frequencies(character_freq_path)
+        self.artist_freqs = torch.ones(num_artists)
 
         # Get class weights
         self.tag_weights = self._get_class_weights(self.tag_freqs)
@@ -120,6 +119,8 @@ class IllustMetricLearningModule(L.LightningModule):
 
         # Initialize metrics
         self.val_metrics = self._create_metrics("val")
+        if "artist" in tasks:
+            self.artist_ranking_metrics = self._create_artist_ranking_metrics("val")
 
     def configure_model(self):
         self.model = torch.compile(self.model)
@@ -128,13 +129,13 @@ class IllustMetricLearningModule(L.LightningModule):
     def forward(self, x: torch.Tensor):
         return self.model(x)
 
-    def _get_class_frequencies(self, dict_path: str) -> torch.Tensor:
-        """Load class frequencies from indices dict."""
-        with open(dict_path) as f:
-            indices_dict = json.load(f)
+    def _get_class_frequencies(self, freq_path: str) -> torch.Tensor:
+        """Load class frequencies from frequency dict."""
+        with open(freq_path) as f:
+            freq_dict = json.load(f)
 
         # Count frequencies for each class
-        freqs = torch.tensor([len(indices) for indices in indices_dict.values()])
+        freqs = torch.tensor(list(freq_dict.values()))
         return freqs
 
     def _get_class_weights(self, freqs: torch.Tensor, alpha: float = 0.5, eps: float = 1e-4) -> torch.Tensor:
@@ -235,6 +236,8 @@ class IllustMetricLearningModule(L.LightningModule):
 
             # Take indices along class axis if doing artist task (multiclass)
             if task == "artist":
+                multi_label = label
+                self.artist_ranking_metrics.update(prob_preds, multi_label)
                 label = label.argmax(dim=1)
 
             self.val_metrics[task].update(prob_preds, label)
@@ -371,6 +374,18 @@ class IllustMetricLearningModule(L.LightningModule):
 
         return metrics
 
+    def _create_artist_ranking_metrics(self, prefix: str) -> MetricCollection:
+        """Calling signature for multi-label ranking metrics is different from multi-class metrics."""
+        task = "artist"
+        num_labels = self.hparams.num_artists
+        return MetricCollection(
+            {
+                f"{prefix}_{task}_ranking_ap": MultilabelRankingAveragePrecision(num_labels=num_labels),
+                f"{prefix}_{task}_ranking_loss": MultilabelRankingLoss(num_labels=num_labels),
+                f"{prefix}_{task}_coverage_error": MultilabelCoverageError(num_labels=num_labels),
+            }
+        )
+
     def _log_temperatures(self):
         if "tag" in self.hparams.tasks:
             if self.hparams.temp_strategy != "class":
@@ -415,12 +430,16 @@ class IllustMetricLearningModule(L.LightningModule):
                 ranking_ap = metric_collection[f"{stage}_{task}_ranking_ap"].compute()
                 ranking_loss = metric_collection[f"{stage}_{task}_ranking_loss"].compute()
                 coverage_error = metric_collection[f"{stage}_{task}_coverage_error"].compute()
-                self.log(f"{stage}/metric/{task}/ranking_ap", ranking_ap)
-                self.log(f"{stage}/metric/{task}/ranking_loss", ranking_loss)
-                self.log(f"{stage}/metric/{task}/coverage_error", coverage_error)
+            else:
+                ranking_ap = self.artist_ranking_metrics[f"{stage}_{task}_ranking_ap"].compute()
+                ranking_loss = self.artist_ranking_metrics[f"{stage}_{task}_ranking_loss"].compute()
+                coverage_error = self.artist_ranking_metrics[f"{stage}_{task}_coverage_error"].compute()
 
             # Log overall scalar metrics
             self.log(f"{stage}/metric/{task}/map/overall", overall_map)
+            self.log(f"{stage}/metric/{task}/ranking/ap", ranking_ap)
+            self.log(f"{stage}/metric/{task}/ranking/loss", ranking_loss)
+            self.log(f"{stage}/metric/{task}/ranking/coverage_error", coverage_error)
 
             # Log AP distribution
             self.logger.experiment.add_histogram(f"{stage}/{task}/ap_dist", ap_scores, global_step=self.global_step)
