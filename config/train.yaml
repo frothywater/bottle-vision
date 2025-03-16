@@ -41,11 +41,11 @@ model:
   dropout: 0.1
   tasks: [tag, character, artist, quality]
   loss_weights:
-    tag: 2.0
-    artist: 1.5
+    tag: 1.0
+    artist: 1.0
     character: 1.0
-    quality: 0.2
-    ortho: 0.5
+    quality: 0.5
+    ortho: 1.0
   temp_strategy: fixed
   tag_contrastive_config:
     temp: 0.05
@@ -66,7 +66,7 @@ model:
   warmup_percent: 0.1
   unfreeze_schedule:
     2: 0.0
-    4: 0.25
+    4: 0.2
   tag_freq_path: ../danbooru2023/train-400k/tag_freq.json
   character_freq_path: ../danbooru2023/train-400k/character_freq.json
 
@@ -80,11 +80,14 @@ data:
   image_size: 448
   label_smoothing_eps: 0.1
   data_tasks: [tag, character, artist]
-  sample_cutoff: 24
+  sample_cutoff:
+    tag: 192
+    artist: 32
+    character: 48
   task_probs:
     tag: 0.5
-    artist: 0.35
-    character: 0.15
+    artist: 0.3
+    character: 0.2
   train_tar_dir: ../danbooru2023/train
   valid_tar_dir: ../danbooru2023/valid
   train_parquet_path: ../danbooru2023/train-400k/images.parquet

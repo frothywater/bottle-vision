@@ -32,7 +32,7 @@ class IllustDataModule(L.LightningDataModule):
         mean: list[float] = [0.5, 0.5, 0.5],
         std: list[float] = [0.5, 0.5, 0.5],
         task_probs: Optional[dict[str, float]] = None,
-        sample_cutoff: Optional[int] = None,
+        sample_cutoff: Optional[int | dict[str, int]] = None,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -82,13 +82,16 @@ class IllustDataModule(L.LightningDataModule):
 
         # Balanced class batch sampler for training
         samplers = {}
+        sample_cutoff = self.hparams.sample_cutoff
+        if isinstance(sample_cutoff, int):
+            sample_cutoff = {task: sample_cutoff for task in task_dicts.keys()}
         for task, indices_dict in task_dicts.items():
             samplers[task] = BalancedClassBatchSampler(
                 task=task,
                 indices_dict=indices_dict,
                 classes_per_batch=self.hparams.classes_per_batch,
                 samples_per_class=self.hparams.samples_per_class,
-                sample_cutoff=self.hparams.sample_cutoff,
+                sample_cutoff=sample_cutoff[task],
             )
 
         # Interleaved batch sampler for different tasks

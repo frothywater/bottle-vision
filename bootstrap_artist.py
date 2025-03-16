@@ -89,7 +89,7 @@ def extract_embed(src_ckpt_path: str, dest_emb_path: str, config_path: str, arti
     dataloader = DataLoader(
         dataset,
         batch_sampler=artist_batches,
-        num_workers=8,
+        num_workers=16,
         pin_memory=True,
         collate_fn=collate_fn,
     )
@@ -106,7 +106,7 @@ def extract_embed(src_ckpt_path: str, dest_emb_path: str, config_path: str, arti
         # average over samples
         artist_emb = artist_emb.mean(dim=0)
         artist_embeds.append(artist_emb)
-    print(f"Collected {len(artist_embeds)} artist embeddings, {artist_embeds.shape}")
+    print(f"Collected {len(artist_embeds)} artist embeddings, {artist_embeds[0].shape}")
 
     artist_embeds = torch.stack(artist_embeds)
     torch.save(artist_embeds, dest_emb_path)
