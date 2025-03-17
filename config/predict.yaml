@@ -1,0 +1,70 @@
+seed_everything: 42
+trainer:
+  accelerator: auto
+  devices: 1
+  precision: bf16-mixed
+  gradient_clip_val: 1.0
+  max_steps: 10000
+  default_root_dir: /volume/exp
+  callbacks:
+    - class_path: bottle_vision.writer.CustomWriter
+      init_args:
+        output_dir: /volume/exp
+
+model:
+  num_tags: 8110
+  num_artists: 4095
+  num_characters: 2751
+  backbone_variant: vit_base_patch16_224
+  cls_token: false
+  reg_tokens: 0
+  image_size: 448
+  tag_embed_dim: 512
+  artist_embed_dim: 128
+  character_embed_dim: 128
+  dropout: 0.1
+  tasks: [tag, character, artist, quality]
+  loss_weights:
+    tag: 1.0
+    artist: 1.0
+    character: 1.0
+    quality: 0.5
+    ortho: 1.0
+  temp_strategy: fixed
+  tag_contrastive_config:
+    temp: 0.05
+    margin: 0.2
+    central_weight: 1.0
+  artist_contrastive_config:
+    temp: 0.1
+    margin: 0.0
+    central_weight: 1.0
+  character_contrastive_config:
+    temp: 0.1
+    margin: 0.0
+    central_weight: 1.0
+  base_lr: 1e-4
+  backbone_lr: 1e-5
+  lr_start_ratio: 0.1
+  lr_end_ratio: 0.1
+  warmup_percent: 0.1
+  tag_freq_path: ../danbooru2023/train-400k/tag_freq.json
+  character_freq_path: ../danbooru2023/train-400k/character_freq.json
+
+data:
+  num_tags: 8110
+  num_artists: 4095
+  num_characters: 2751
+  classes_per_batch: 16
+  samples_per_class: 8
+  num_workers: 32
+  image_size: 448
+  label_smoothing_eps: 0
+  data_tasks: [tag, character, artist]
+  test_tar_dir: ../danbooru2023/test
+  test_parquet_path: ../danbooru2023/test/images.parquet
+  train_tar_dir: ../danbooru2023/train
+  train_parquet_path: ../danbooru2023/train-400k/images.parquet
+  train_tag_dict_path: ../danbooru2023/train-400k/tag_indices.json
+  train_artist_dict_path: ../danbooru2023/train-400k/artist_indices.json
+  train_character_dict_path: ../danbooru2023/train-400k/character_indices.json

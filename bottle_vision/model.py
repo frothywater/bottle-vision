@@ -20,6 +20,18 @@ class ModelOutput:
     central_loss_stats: dict[str, torch.Tensor]
 
 
+@dataclass
+class InferenceOutput:
+    embed: torch.Tensor
+    tag_embed: torch.Tensor
+    tag_logits: torch.Tensor
+    artist_embed: torch.Tensor
+    artist_logits: torch.Tensor
+    character_embed: torch.Tensor
+    character_logits: torch.Tensor
+    quality_score: torch.Tensor
+
+
 class IllustEmbeddingModel(nn.Module):
     """Multi-task metric learning model architecture for illustrations.
 
@@ -104,13 +116,38 @@ class IllustEmbeddingModel(nn.Module):
         else:
             raise ValueError(f"Unknown temperature strategy: {strategy}")
 
-    def forward(self, x: torch.Tensor):
+    def forward(self, x: torch.Tensor) -> InferenceOutput:
         features = self.backbone(x)
-        tag_emb = self.dropout(self.tag_head(features)) if "tag" in self.tasks else None
-        artist_emb = self.dropout(self.artist_head(features)) if "artist" in self.tasks else None
-        character_emb = self.dropout(self.character_head(features)) if "character" in self.tasks else None
+
+        tag_emb = self.tag_head(features) if "tag" in self.tasks else None
+        artist_emb = self.artist_head(features) if "artist" in self.tasks else None
+        character_emb = self.character_head(features) if "character" in self.tasks else None
         quality_score = self.quality_head(features).squeeze(-1) if "quality" in self.tasks else None
-        return tag_emb, artist_emb, character_emb, quality_score
+
+        tag_logits = (
+            F.normalize(tag_emb, dim=1) @ F.normalize(self.tag_prototypes, dim=1).T if tag_emb is not None else None
+        )
+        artist_logits = (
+            F.normalize(artist_emb, dim=1) @ F.normalize(self.artist_prototypes, dim=1).T
+            if artist_emb is not None
+            else None
+        )
+        character_logits = (
+            F.normalize(character_emb, dim=1) @ F.normalize(self.character_prototypes, dim=1).T
+            if character_emb is not None
+            else None
+        )
+
+        return InferenceOutput(
+            embed=features,
+            tag_embed=tag_emb,
+            tag_logits=tag_logits,
+            artist_embed=artist_emb,
+            artist_logits=artist_logits,
+            character_embed=character_emb,
+            character_logits=character_logits,
+            quality_score=quality_score,
+        )
 
     def forward_task(
         self,

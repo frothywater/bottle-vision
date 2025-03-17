@@ -28,6 +28,8 @@ class IllustDataModule(L.LightningDataModule):
         image_size: int = 448,
         valid_parquet_path: Optional[str] = None,
         valid_tar_dir: Optional[str] = None,
+        test_parquet_path: Optional[str] = None,
+        test_tar_dir: Optional[str] = None,
         label_smoothing_eps: float = 0,
         mean: list[float] = [0.5, 0.5, 0.5],
         std: list[float] = [0.5, 0.5, 0.5],
@@ -114,6 +116,33 @@ class IllustDataModule(L.LightningDataModule):
         dataset = IllustDataset(
             parquet_path=self.hparams.valid_parquet_path,
             tar_dir=self.hparams.valid_tar_dir,
+            num_tags=self.hparams.num_tags,
+            num_artists=self.hparams.num_artists,
+            num_characters=self.hparams.num_characters,
+            tasks=self.hparams.data_tasks,
+            image_size=self.hparams.image_size,
+            mean=self.hparams.mean,
+            std=self.hparams.std,
+            label_smoothing_eps=0,
+        )
+        # Use default sampler (load all images sequentially)
+        return DataLoader(
+            dataset,
+            batch_size=self.hparams.classes_per_batch * self.hparams.samples_per_class,
+            num_workers=self.hparams.num_workers,
+            prefetch_factor=self.hparams.prefetch_factor,
+            collate_fn=self._collate_fn,
+            pin_memory=True,
+        )
+
+    def predict_dataloader(self):
+        if not (self.hparams.test_parquet_path and self.hparams.test_tar_dir):
+            return None
+
+        # Use plain transforms and no label smoothing
+        dataset = IllustDataset(
+            parquet_path=self.hparams.test_parquet_path,
+            tar_dir=self.hparams.test_tar_dir,
             num_tags=self.hparams.num_tags,
             num_artists=self.hparams.num_artists,
             num_characters=self.hparams.num_characters,

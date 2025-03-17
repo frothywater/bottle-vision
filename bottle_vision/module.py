@@ -244,6 +244,11 @@ class IllustMetricLearningModule(L.LightningModule):
 
         return total_loss
 
+    def predict_step(self, batch: IllustDatasetItem, batch_idx: int):
+        outputs = self.model(batch.image)
+        filenames = batch.filename
+        return outputs, filenames
+
     # ===== Optimizer and Scheduler =====
 
     def lr_fn(self, current_step: int, start_steps: int, warmup_steps: int, total_steps: int):
