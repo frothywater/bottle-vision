@@ -32,11 +32,34 @@ class InferenceOutput:
     quality_score: torch.Tensor
 
 
+class ContrastivePrototypes(nn.Module):
+    """Contrastive prototypes for multi-task metric learning model."""
+
+    def __init__(self, num_classes: int, embed_dim: int):
+        super().__init__()
+        self.weight = nn.Parameter(torch.randn(num_classes, embed_dim))
+
+
+class ContrastiveTemp(nn.Module):
+    """Contrastive temperature for multi-task metric learning model."""
+
+    def __init__(self, num_classes: int, temp: float, temp_strategy: Literal["fixed", "task", "class"]):
+        super().__init__()
+
+        if temp_strategy == "fixed":
+            self.val = temp
+        elif temp_strategy == "task":
+            self.val = nn.Parameter(torch.tensor(temp))
+        elif temp_strategy == "class":
+            self.val = nn.Parameter(torch.ones(1, num_classes) * temp)
+        else:
+            raise ValueError(f"Unknown temperature strategy: {temp_strategy}")
+
+
 class IllustEmbeddingModel(nn.Module):
     """Multi-task metric learning model architecture for illustrations.
 
-    Learns joint embeddings for tags, artists, and characters while maintaining
-    orthogonality between different embedding spaces.
+    Learns joint embeddings for tags, artists, and characters.
     """
 
     def __init__(
@@ -77,44 +100,177 @@ class IllustEmbeddingModel(nn.Module):
         self.dropout = nn.Dropout(dropout)
 
         # Projection heads and prototypes
+        self.trainable_module_names = []
         if "tag" in tasks:
-            if tag_embed_dim == self.hidden_dim and "artist" not in tasks:
-                self.tag_head = nn.Identity()
-                logger.info("Set tag head as identity")
-            else:
-                self.tag_head = nn.Linear(self.hidden_dim, tag_embed_dim, bias=False)
-                nn.init.orthogonal_(self.tag_head.weight)
-            self.tag_prototypes = nn.Parameter(torch.randn(num_tags, tag_embed_dim))
-            self.tag_temp = self._make_temp(tag_temp, temp_strategy, num_tags)
+            self.tag_head = nn.Linear(self.hidden_dim, tag_embed_dim, bias=False)
+            nn.init.orthogonal_(self.tag_head.weight)
+
+            self.tag_prototypes = ContrastivePrototypes(num_tags, tag_embed_dim)
+            self.tag_temp = ContrastiveTemp(num_tags, tag_temp, temp_strategy)
+
+            self.trainable_module_names += ["tag_head", "tag_prototypes"]
+            if temp_strategy != "fixed":
+                self.trainable_module_names.append("tag_temp")
 
         if "character" in tasks:
-            if character_embed_dim == self.hidden_dim and "artist" not in tasks:
-                self.character_head = nn.Identity()
-                logger.info("Set character head as identity")
-            else:
-                self.character_head = nn.Linear(self.hidden_dim, character_embed_dim, bias=False)
-                nn.init.orthogonal_(self.character_head.weight)
-            self.character_prototypes = nn.Parameter(torch.randn(num_characters, character_embed_dim))
-            self.character_temp = self._make_temp(character_temp, temp_strategy, num_characters)
+            self.character_head = nn.Linear(self.hidden_dim, character_embed_dim, bias=False)
+            nn.init.orthogonal_(self.character_head.weight)
+
+            self.character_prototypes = ContrastivePrototypes(num_characters, character_embed_dim)
+            self.character_temp = ContrastiveTemp(num_characters, character_temp, temp_strategy)
+
+            self.trainable_module_names += ["character_head", "character_prototypes"]
+            if temp_strategy != "fixed":
+                self.trainable_module_names.append("character_temp")
 
         if "artist" in tasks:
-            self.artist_head = nn.Linear(self.hidden_dim, artist_embed_dim)
-            self.artist_prototypes = nn.Parameter(torch.randn(num_artists, artist_embed_dim))
-            nn.init.xavier_normal_(self.artist_prototypes)
-            self.artist_temp = self._make_temp(artist_temp, temp_strategy, num_artists)
+            self.artist_head = nn.Linear(self.hidden_dim, artist_embed_dim, bias=False)
+
+            self.artist_prototypes = ContrastivePrototypes(num_artists, artist_embed_dim)
+            self.artist_temp = ContrastiveTemp(num_artists, artist_temp, temp_strategy)
+
+            self.trainable_module_names += ["artist_head", "artist_prototypes"]
+            if temp_strategy != "fixed":
+                self.trainable_module_names.append("artist_temp")
 
         if "quality" in tasks:
             self.quality_head = nn.Linear(self.hidden_dim, 1)
+            self.trainable_module_names.append("quality_head")
 
-    def _make_temp(self, temp: float, strategy: Literal["fixed", "task", "class"], num_classes: int = None):
-        if strategy == "fixed":
-            return temp
-        elif strategy == "task":
-            return nn.Parameter(torch.tensor(temp))
-        elif strategy == "class":
-            return nn.Parameter(torch.ones(1, num_classes) * temp)
+    def _forward_backbone(self, x: torch.Tensor) -> torch.Tensor:
+        # TODO: style-related intermediates fusion
+        x, intermediates = self.backbone.forward_intermediates(x, indices=[], output_fmt="NLC")
+
+    def _compute_task_output(
+        self,
+        features: torch.Tensor,
+        labels: torch.Tensor,
+        task: str,
+        contrastive_params: ContrastiveLossParams,
+        use_focal_loss: bool = False,
+        masks: Optional[torch.Tensor] = None,
+        class_weights: Optional[torch.Tensor] = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Compute similarities and loss for a specific task."""
+        # Select appropriate head and prototypes based on task
+        assert task in self.tasks, f"Task {task} not in model tasks: {self.tasks}"
+        if task == "tag":
+            head = self.tag_head
+            prototypes = self.tag_prototypes.weight
+            temp = self.tag_temp.val
+        elif task == "artist":
+            head = self.artist_head
+            prototypes = self.artist_prototypes.weight
+            temp = self.artist_temp.val
+        elif task == "character":
+            head = self.character_head
+            prototypes = self.character_prototypes.weight
+            temp = self.character_temp.val
         else:
-            raise ValueError(f"Unknown temperature strategy: {strategy}")
+            raise ValueError(f"Unknown task: {task}")
+
+        # Compute embeddings and similarities
+        embeddings = head(self.dropout(features))
+        similarities = F.normalize(embeddings, dim=1) @ F.normalize(prototypes, dim=1).T
+        probs = torch.sigmoid(similarities / temp)
+
+        # Compute loss with class weights
+        loss, contrast_loss, central_loss = central_contrastive_loss(
+            sim=similarities,
+            labels=labels,
+            temp=temp,
+            params=contrastive_params,
+            mask=masks,
+            prob_preds=probs if use_focal_loss else None,
+            class_weights=class_weights,
+        )
+
+        return probs, loss, contrast_loss, central_loss
+
+    def forward_task(
+        self,
+        x: torch.Tensor,
+        labels: torch.Tensor,
+        score: torch.Tensor,
+        task: str,
+        contrastive_params: ContrastiveLossParams,
+        use_focal_loss: bool = False,
+        masks: Optional[torch.Tensor] = None,
+        class_weights: Optional[torch.Tensor] = None,
+    ) -> ModelOutput:
+        """Forward pass for a specific task."""
+        # Get backbone features
+        features = self.backbone(x)
+
+        # Compute task-specific outputs
+        prob_preds, task_loss, contrast_loss, central_loss = self._compute_task_output(
+            features=features,
+            labels=labels,
+            task=task,
+            contrastive_params=contrastive_params,
+            masks=masks,
+            class_weights=class_weights,
+            use_focal_loss=use_focal_loss,
+        )
+        losses = LossComponents(**{task: task_loss})
+
+        # Compute quality loss
+        if "quality" in self.tasks:
+            quality_score = self.quality_head(features).squeeze(-1)
+            losses.quality = F.mse_loss(quality_score, score)
+
+        return ModelOutput(
+            prob_preds=prob_preds,
+            losses=losses,
+            contrast_loss_stats={task: contrast_loss},
+            central_loss_stats={task: central_loss},
+        )
+
+    def forward_all_tasks(
+        self,
+        x: torch.Tensor,
+        labels: dict[str, torch.Tensor],
+        score: torch.Tensor,
+        contrastive_params: dict[str, ContrastiveLossParams],
+        use_focal_loss: bool = False,
+        masks: dict[str, torch.Tensor] = {},
+        class_weights: dict[str, torch.Tensor] = {},
+    ) -> ModelOutput:
+        """Forward pass for all tasks, used in validation/test."""
+        # Get backbone features
+        features = self.backbone(x)
+
+        # Compute task-specific outputs
+        prob_preds = {}
+        contrast_loss_stats = {}
+        central_loss_stats = {}
+        losses = LossComponents()
+        for task, labels in labels.items():
+            task_prob_preds, task_loss, contrast_loss, central_loss = self._compute_task_output(
+                features=features,
+                labels=labels,
+                task=task,
+                contrastive_params=contrastive_params[task],
+                masks=masks.get(task),
+                class_weights=class_weights.get(task),
+                use_focal_loss=use_focal_loss,
+            )
+            prob_preds[task] = task_prob_preds
+            contrast_loss_stats[task] = contrast_loss
+            central_loss_stats[task] = central_loss
+            losses.__setattr__(task, task_loss)
+
+        # Compute quality loss
+        if "quality" in self.tasks:
+            quality_score = self.quality_head(features).squeeze(-1)
+            losses.quality = F.mse_loss(quality_score, score)
+
+        return ModelOutput(
+            prob_preds=prob_preds,
+            losses=losses,
+            contrast_loss_stats=contrast_loss_stats,
+            central_loss_stats=central_loss_stats,
+        )
 
     def forward(self, x: torch.Tensor) -> InferenceOutput:
         features = self.backbone(x)
@@ -149,146 +305,6 @@ class IllustEmbeddingModel(nn.Module):
             quality_score=quality_score,
         )
 
-    def forward_task(
-        self,
-        x: torch.Tensor,
-        labels: torch.Tensor,
-        score: torch.Tensor,
-        task: str,
-        contrastive_params: ContrastiveLossParams,
-        masks: Optional[torch.Tensor] = None,
-        class_weights: Optional[torch.Tensor] = None,
-    ) -> ModelOutput:
-        """Forward pass for a specific task."""
-        # Get backbone features
-        features = self.backbone(x)
-
-        # Compute task-specific outputs
-        prob_preds, task_loss, contrast_loss, central_loss = self._compute_task_output(
-            features=features,
-            labels=labels,
-            task=task,
-            contrastive_params=contrastive_params,
-            masks=masks,
-            class_weights=class_weights,
-        )
-        losses = LossComponents(**{task: task_loss})
-
-        # Compute quality loss
-        if "quality" in self.tasks:
-            quality_score = self.quality_head(features).squeeze(-1)
-            losses.quality = F.mse_loss(quality_score, score)
-
-        # Compute orthogonality losses
-        if task == "artist":
-            losses.ortho = self._compute_ortho_loss()
-
-        return ModelOutput(
-            prob_preds=prob_preds,
-            losses=losses,
-            contrast_loss_stats={task: contrast_loss},
-            central_loss_stats={task: central_loss},
-        )
-
-    def _compute_task_output(
-        self,
-        features: torch.Tensor,
-        labels: torch.Tensor,
-        task: str,
-        contrastive_params: ContrastiveLossParams,
-        masks: Optional[torch.Tensor] = None,
-        class_weights: Optional[torch.Tensor] = None,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Compute similarities and loss for a specific task."""
-        # Select appropriate head and prototypes based on task
-        assert task in self.tasks, f"Task {task} not in model tasks: {self.tasks}"
-        if task == "tag":
-            head = self.tag_head
-            prototypes = self.tag_prototypes
-            temp = self.tag_temp
-        elif task == "artist":
-            head = self.artist_head
-            prototypes = self.artist_prototypes
-            temp = self.artist_temp
-        elif task == "character":
-            head = self.character_head
-            prototypes = self.character_prototypes
-            temp = self.character_temp
-        else:
-            raise ValueError(f"Unknown task: {task}")
-
-        # Compute embeddings and similarities
-        embeddings = self.dropout(head(features))
-        similarities = F.normalize(embeddings, dim=1) @ F.normalize(prototypes, dim=1).T
-        probs = torch.sigmoid(similarities / temp)
-
-        # Compute loss with class weights
-        loss, contrast_loss, central_loss = central_contrastive_loss(
-            sim=similarities,
-            labels=labels,
-            temp=temp,
-            params=contrastive_params,
-            mask=masks,
-            # prob_preds=probs,
-            class_weights=class_weights,
-        )
-
-        return probs, loss, contrast_loss, central_loss
-
-    def forward_all_tasks(
-        self,
-        x: torch.Tensor,
-        labels: dict[str, torch.Tensor],
-        score: torch.Tensor,
-        contrastive_params: dict[str, ContrastiveLossParams],
-        masks: dict[str, torch.Tensor] = {},
-        class_weights: dict[str, torch.Tensor] = {},
-    ) -> ModelOutput:
-        """Forward pass for all tasks, used in validation/test."""
-        # Get backbone features
-        features = self.backbone(x)
-
-        # Compute task-specific outputs
-        prob_preds = {}
-        contrast_loss_stats = {}
-        central_loss_stats = {}
-        losses = LossComponents()
-        for task, labels in labels.items():
-            task_prob_preds, task_loss, contrast_loss, central_loss = self._compute_task_output(
-                features=features,
-                labels=labels,
-                task=task,
-                contrastive_params=contrastive_params[task],
-                masks=masks.get(task),
-                class_weights=class_weights.get(task),
-            )
-            prob_preds[task] = task_prob_preds
-            contrast_loss_stats[task] = contrast_loss
-            central_loss_stats[task] = central_loss
-            losses.__setattr__(task, task_loss)
-
-        # Compute quality loss
-        if "quality" in self.tasks:
-            quality_score = self.quality_head(features).squeeze(-1)
-            losses.quality = F.mse_loss(quality_score, score)
-
-        # Compute orthogonality losses
-        if "artist" in self.tasks:
-            losses.ortho = self._compute_ortho_loss()
-
-        return ModelOutput(
-            prob_preds=prob_preds,
-            losses=losses,
-            contrast_loss_stats=contrast_loss_stats,
-            central_loss_stats=central_loss_stats,
-        )
-
-    def _compute_ortho_loss(self) -> torch.Tensor:
-        # Artist embeddings should be orthogonal to tag and character embeddings
-        tag_ortho = torch.norm(self.artist_head.weight @ self.tag_head.weight.T.detach(), p="fro") ** 2
-        char_ortho = torch.norm(self.artist_head.weight @ self.character_head.weight.T.detach(), p="fro") ** 2
-        return tag_ortho + char_ortho
-
     def load_wd_tagger_weights(self, num_tags: int, num_characters: int):
         """Load weights from WD-Tagger pretrained model."""
         pretrained_model = timm.create_model("hf_hub:SmilingWolf/wd-vit-tagger-v3", pretrained=True)
@@ -321,28 +337,36 @@ class IllustEmbeddingModel(nn.Module):
         if num_tags + num_characters == pretrained_model.num_classes:
             if "tag" in self.tasks:
                 # extract embeddings from pretrained head
-                pretrained_tag_embeddings = pretrained_model.head.weight[:num_tags].to(self.tag_prototypes.device)
+                pretrained_tag_embeddings = pretrained_model.head.weight[:num_tags]
+                pretrained_tag_embeddings = pretrained_tag_embeddings.to(self.tag_prototypes.weight.device)
+                pretrained_tag_embeddings = F.normalize(pretrained_tag_embeddings, dim=1)
                 # project embeddings to tag and character prototypes
                 if hasattr(self.tag_head, "weight"):
                     # (num_classes, hidden_dim) @ (class_dim, hidden_dim).T -> (num_classes, class_dim)
-                    self.tag_prototypes.data = pretrained_tag_embeddings @ self.tag_head.weight.T
-                    logger.info(f"Loaded tag prototypes from head: {self.tag_prototypes.shape}, projected by head")
-                else:
-                    self.tag_prototypes.data = pretrained_tag_embeddings
-                    logger.info(f"Loaded tag prototypes from head: {self.tag_prototypes.shape}")
-
-            if "character" in self.tasks:
-                pretrained_character_embeddings = pretrained_model.head.weight[num_tags:].to(
-                    self.character_prototypes.device
-                )
-                if hasattr(self.character_head, "weight"):
-                    self.character_prototypes.data = pretrained_character_embeddings @ self.character_head.weight.T
+                    projected_tag_embeddings = pretrained_tag_embeddings @ self.tag_head.weight.T
+                    self.tag_prototypes.weight.data = projected_tag_embeddings
                     logger.info(
-                        f"Loaded character prototypes from head: {self.character_prototypes.shape}, projected by head"
+                        f"Loaded tag prototypes from head: {self.tag_prototypes.weight.shape}, projected by head"
                     )
                 else:
-                    self.character_prototypes.data = pretrained_character_embeddings
-                    logger.info(f"Loaded character prototypes from head: {self.character_prototypes.shape}")
+                    self.tag_prototypes.weight.data = pretrained_tag_embeddings
+                    logger.info(f"Loaded tag prototypes from head: {self.tag_prototypes.weight.shape}")
+
+            if "character" in self.tasks:
+                pretrained_character_embeddings = pretrained_model.head.weight[num_tags:]
+                pretrained_character_embeddings = pretrained_character_embeddings.to(
+                    self.character_prototypes.weight.device
+                )
+                pretrained_character_embeddings = F.normalize(pretrained_character_embeddings, dim=1)
+                if hasattr(self.character_head, "weight"):
+                    projected_character_embeddings = pretrained_character_embeddings @ self.character_head.weight.T
+                    self.character_prototypes.weight.data = projected_character_embeddings
+                    logger.info(
+                        f"Loaded character prototypes from head: {self.character_prototypes.weight.shape}, projected by head"
+                    )
+                else:
+                    self.character_prototypes.weight.data = pretrained_character_embeddings
+                    logger.info(f"Loaded character prototypes from head: {self.character_prototypes.weight.shape}")
 
     def _copy_weights(self, target: nn.Module, source: nn.Module):
         """Copy weights and biases from source to target."""
@@ -360,46 +384,3 @@ class IllustEmbeddingModel(nn.Module):
         self._copy_weights(target_block.mlp.fc2, source_block.mlp.fc2)
         self._copy_weights(target_block.norm1, source_block.norm1)
         self._copy_weights(target_block.norm2, source_block.norm2)
-
-    def freeze_loaded_weights(self, freeze_pos_embed: bool = True):
-        """Freeze all weights that have been loaded in the load_wd_tagger_weights function."""
-        # Freeze patch embedding weights
-        self.backbone.patch_embed.proj.weight.requires_grad = False
-        self.backbone.patch_embed.proj.bias.requires_grad = False
-        logger.info("Froze patch embedding weights")
-
-        # Freeze positional embedding weights
-        if freeze_pos_embed:
-            self.backbone.pos_embed.requires_grad = False
-            logger.info("Froze positional embedding weights")
-
-        # Freeze weights for each transformer block
-        for block in self.backbone.blocks:
-            for param in block.parameters():
-                param.requires_grad = False
-        logger.info(f"Froze weights for {len(self.backbone.blocks)} transformer blocks")
-
-        # Freeze norm weights
-        self.backbone.norm.weight.requires_grad = False
-        self.backbone.norm.bias.requires_grad = False
-        logger.info("Froze norm weights")
-
-        # No need to freeze tag and artist prototypes, since heads are learnable
-
-    def unfreeze_layers(self, num_layers: int):
-        """Unfreeze the last num_layers transformer blocks."""
-        if num_layers >= len(self.backbone.blocks):
-            for param in self.parameters():
-                param.requires_grad = True
-            logger.info("Unfroze all parameters")
-            return
-
-        for block in self.backbone.blocks[-num_layers:]:
-            for param in block.parameters():
-                param.requires_grad = True
-        logger.info(f"Unfroze the last {num_layers} transformer blocks")
-
-        # Unfreeze norm weights
-        self.backbone.norm.weight.requires_grad = True
-        self.backbone.norm.bias.requires_grad = True
-        logger.info("Unfroze norm weights")

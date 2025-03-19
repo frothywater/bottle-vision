@@ -1,5 +1,6 @@
 import logging
 
+import torch
 from lightning.pytorch.cli import LightningCLI
 
 from bottle_vision.datamodule import IllustDataModule
@@ -12,5 +13,7 @@ if __name__ == "__main__":
     handler.setLevel(logging.INFO)
     handler.setFormatter(logging.Formatter("[%(asctime)s] %(levelname)s %(name)s: %(message)s"))
     logger.addHandler(handler)
+
+    torch.set_float32_matmul_precision("high")
 
     cli = LightningCLI(IllustMetricLearningModule, IllustDataModule)

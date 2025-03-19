@@ -6,13 +6,15 @@ from typing import Literal, Optional
 import lightning as L
 import matplotlib.pyplot as plt
 import numpy as np
+import peft
 import torch
 import torch.nn as nn
+from peft import LoraConfig
 from torchmetrics import AveragePrecision, MetricCollection, PrecisionRecallCurve
 from torchmetrics.classification import (
+    MultilabelCoverageError,
     MultilabelRankingAveragePrecision,
     MultilabelRankingLoss,
-    MultilabelCoverageError,
 )
 
 from bottle_vision.dataset import IllustDatasetItem
@@ -30,9 +32,11 @@ def log_dict(stage: str, output: ModelOutput, total_loss: torch.Tensor) -> dict[
             result[f"{stage}/loss/{key}"] = value
 
     for key, value in output.contrast_loss_stats.items():
-        result[f"{stage}/loss/{key}/contrast"] = value
+        if isinstance(value, torch.Tensor):
+            result[f"{stage}/loss/{key}/contrast"] = value
     for key, value in output.central_loss_stats.items():
-        result[f"{stage}/loss/{key}/central"] = value
+        if isinstance(value, torch.Tensor):
+            result[f"{stage}/loss/{key}/central"] = value
 
     return result
 
@@ -40,8 +44,7 @@ def log_dict(stage: str, output: ModelOutput, total_loss: torch.Tensor) -> dict[
 class IllustMetricLearningModule(L.LightningModule):
     """Multi-task metric learning model for illustrations.
 
-    Learns joint embeddings for tags, artists, and characters while maintaining
-    orthogonality between different embedding spaces.
+    Learns joint embeddings for tags, artists, and characters.
     """
 
     def __init__(
@@ -51,6 +54,7 @@ class IllustMetricLearningModule(L.LightningModule):
         num_artists: int,
         num_characters: int,
         tag_freq_path: str,
+        artist_freq_path: str,
         character_freq_path: str,
         tasks: list[str],
         # model
@@ -62,20 +66,22 @@ class IllustMetricLearningModule(L.LightningModule):
         cls_token: bool = False,
         reg_tokens: int = 0,
         dropout: float = 0.1,
+        lora_config: dict = {},
         # training
         base_lr: float = 3e-4,
-        backbone_lr: float = 3e-5,
         lr_start_ratio: float = 0.1,
         lr_end_ratio: float = 0.1,
         warmup_percent: float = 0.05,
-        unfreeze_schedule: dict[int, float] = {},
         weight_path: Optional[str] = None,
         # loss
         loss_weights: LossWeights = LossWeights(),
+        use_focal_loss: bool = False,
+        class_reweighting: bool = False,
+        class_reweighting_method: Literal["sqrt", "log"] = "sqrt",
+        temp_strategy: Literal["fixed", "task", "class"] = "fixed",
         tag_contrastive_config: ContrastiveLossConfig = ContrastiveLossConfig(),
         artist_contrastive_config: ContrastiveLossConfig = ContrastiveLossConfig(),
         character_contrastive_config: ContrastiveLossConfig = ContrastiveLossConfig(),
-        temp_strategy: Literal["fixed", "task", "class"] = "fixed",
         # metric
         num_freq_bins: int = 5,
     ):
@@ -102,15 +108,18 @@ class IllustMetricLearningModule(L.LightningModule):
             temp_strategy=temp_strategy,
         )
 
+        # Initialize model weights
+        self.init_model()
+
         # Load and process class frequencies
         self.tag_freqs = self._get_class_frequencies(tag_freq_path)
         self.character_freqs = self._get_class_frequencies(character_freq_path)
-        self.artist_freqs = torch.ones(num_artists)
+        self.artist_freqs = self._get_class_frequencies(artist_freq_path)
 
         # Get class weights
-        self.tag_weights = self._get_class_weights(self.tag_freqs)
-        self.artist_weights = self._get_class_weights(self.artist_freqs)
-        self.character_weights = self._get_class_weights(self.character_freqs)
+        self.tag_weights = self._get_class_weights(self.tag_freqs, class_reweighting_method)
+        self.artist_weights = self._get_class_weights(self.artist_freqs, class_reweighting_method)
+        self.character_weights = self._get_class_weights(self.character_freqs, class_reweighting_method)
 
         # Get frequency bins
         self.tag_bins = self._get_frequency_bins(self.tag_freqs, num_freq_bins)
@@ -122,51 +131,87 @@ class IllustMetricLearningModule(L.LightningModule):
         if "artist" in tasks:
             self.artist_ranking_metrics = self._create_artist_ranking_metrics("val")
 
-    def configure_model(self):
+    # ===== Model Configuration & Checkpointing =====
+
+    def init_model(self):
+        # 1. Copy WD weights
+        self.model.load_wd_tagger_weights(self.hparams.num_tags, self.hparams.num_characters)
+
+        # 2. Configure LoRA
+        lora_params = dict(
+            target_modules=["attn.qkv"],
+            layers_pattern="blocks",
+            use_rslora=True,
+        )
+        lora_params.update(self.hparams.lora_config)
+
+        lora_config = LoraConfig(**lora_params)
+        # Manually add norm modules to train
+        norm_modules = ["backbone.norm"]
+        if lora_config.layers_to_transform is not None:
+            layer_indices = lora_config.layers_to_transform
+            if isinstance(layer_indices, int):
+                layer_indices = [layer_indices]
+            for i in layer_indices:
+                norm_modules.append(f"backbone.blocks.{i}.norm1")
+                norm_modules.append(f"backbone.blocks.{i}.norm2")
+
+        lora_config.modules_to_save = self.model.trainable_module_names + norm_modules
+
+        self.model = peft.get_peft_model(self.model, lora_config)
+
+        self.model.print_trainable_parameters()
+        logger.info(f"LoRA Config: {lora_config}")
+        peft_state_dict = self._get_peft_model_state_dict()
+        trainable_keys = [k.removeprefix("base_model.model.") for k in peft_state_dict.keys()]
+        logger.info(f"LoRA trainable modules: {', '.join(trainable_keys)}")
+
+        # 3. torch.compile
         self.model = torch.compile(self.model)
-        torch.set_float32_matmul_precision("high")
 
-    def forward(self, x: torch.Tensor):
-        return self.model(x)
+        # 4. (optional) Load custom weights (not strict)
+        if self.hparams.weight_path is not None:
+            # Load weights
+            state_dict = torch.load(self.hparams.weight_path)["state_dict"]
 
-    def _get_class_frequencies(self, freq_path: str) -> torch.Tensor:
-        """Load class frequencies from frequency dict."""
-        with open(freq_path) as f:
-            freq_dict = json.load(f)
+            # result = self.model.load_state_dict(state_dict, strict=False)
+            result = peft.set_peft_model_state_dict(self.model, state_dict)
 
-        # Count frequencies for each class
-        freqs = torch.tensor(list(freq_dict.values()))
-        return freqs
+            logger.info(f"Loaded weights from {self.hparams.weight_path}")
+            logger.debug(f"All keys: {', '.join(state_dict.keys())}")
+            if result.missing_keys:
+                logger.debug(f"Missing keys: {', '.join(result.missing_keys)}")
+            if result.unexpected_keys:
+                logger.debug(f"Unexpected keys: {', '.join(result.unexpected_keys)}")
 
-    def _get_class_weights(self, freqs: torch.Tensor, alpha: float = 0.5, eps: float = 1e-4) -> torch.Tensor:
-        freqs = freqs / freqs.sum()
-        return (freqs + eps) ** -alpha
+    def on_save_checkpoint(self, checkpoint):
+        checkpoint["state_dict"] = self._get_peft_model_state_dict()
+        logger.debug(f"Saving checkpoint, keys: {', '.join(checkpoint['state_dict'].keys())}")
+        return checkpoint
 
-    def _get_frequency_bins(self, freqs: torch.Tensor, num_freq_bins: int) -> list[torch.Tensor]:
-        """Split classes into several frequency bins."""
-        # Calculate log frequencies
-        log_freqs = torch.log(freqs + 1)  # +1 to handle zeros
+    def _get_peft_model_state_dict(self):
+        state_dict = peft.get_peft_model_state_dict(self.model)
 
-        # Calculate quantiles for frequency bins
-        bin_edges = torch.quantile(log_freqs, torch.linspace(0, 1, num_freq_bins + 1))
-        bin_edges[-1] += 1  # Include the last element
+        # Manually add `base_layer.bias`, due to a bug in peft
+        # `get_peft_model_state_dict()` doesn't export bias parameters when `bias=lora_only`
+        if self.model.peft_config.bias == "lora_only":
+            for name, param in self.model.named_parameters():
+                if "base_layer.bias" in name:
+                    state_dict[name] = param
 
-        # Assign each class to a frequency bin
-        bin_masks = []
-        for i, (low, high) in enumerate(zip(bin_edges[:-1], bin_edges[1:])):
-            mask = (log_freqs >= low) & (log_freqs < high)
-            # Skip empty bins
-            if mask.sum() > 0:
-                bin_masks.append(mask)
-        return bin_masks
+        return state_dict
+
+    # ===== Training and Validation Steps =====
 
     def training_step(self, batch: IllustDatasetItem, batch_idx: int):
         task = batch.task[0]
         params = ContrastiveLossParams.from_config(self.hparams[f"{task}_contrastive_config"])
-        class_weights = self.__getattribute__(f"{task}_weights")
-        if class_weights.device != batch.image.device:
-            class_weights = class_weights.to(batch.image.device)
-            self.__setattr__(f"{task}_weights", class_weights)
+
+        if self.hparams.class_reweighting:
+            class_weights = self.__getattribute__(f"{task}_weights")
+            if class_weights.device != batch.image.device:
+                class_weights = class_weights.to(batch.image.device)
+                self.__setattr__(f"{task}_weights", class_weights)
 
         output: ModelOutput = self.model.forward_task(
             x=batch.image,
@@ -175,7 +220,8 @@ class IllustMetricLearningModule(L.LightningModule):
             masks=batch.__getattribute__(f"{task}_mask"),
             score=batch.score,
             contrastive_params=params,
-            class_weights=class_weights,
+            class_weights=class_weights if self.hparams.class_reweighting else None,
+            use_focal_loss=self.hparams.use_focal_loss,
         )
 
         # Compute total loss
@@ -193,22 +239,18 @@ class IllustMetricLearningModule(L.LightningModule):
         labels = {}
         masks = {}
         params = {}
-        class_weights = {}
         if batch.tag_label is not None and "tag" in self.hparams.tasks:
             labels["tag"] = batch.tag_label
             masks["tag"] = batch.tag_mask
             params["tag"] = ContrastiveLossParams.from_config(self.hparams.tag_contrastive_config)
-            class_weights["tag"] = self.tag_weights
         if batch.artist_label is not None and "artist" in self.hparams.tasks:
             labels["artist"] = batch.artist_label
             masks["artist"] = batch.artist_mask
             params["artist"] = ContrastiveLossParams.from_config(self.hparams.artist_contrastive_config)
-            class_weights["artist"] = self.artist_weights
         if batch.character_label is not None and "character" in self.hparams.tasks:
             labels["character"] = batch.character_label
             masks["character"] = batch.character_mask
             params["character"] = ContrastiveLossParams.from_config(self.hparams.character_contrastive_config)
-            class_weights["character"] = self.character_weights
 
         # Forward for all tasks
         output: ModelOutput = self.model.forward_all_tasks(
@@ -217,6 +259,7 @@ class IllustMetricLearningModule(L.LightningModule):
             masks=masks,
             score=batch.score,
             contrastive_params=params,
+            use_focal_loss=self.hparams.use_focal_loss,
         )
 
         # Compute total loss
@@ -266,75 +309,56 @@ class IllustMetricLearningModule(L.LightningModule):
             return self.hparams.lr_end_ratio + (1 + np.cos(progress * np.pi)) / 2 * (1 - self.hparams.lr_end_ratio)
 
     def configure_optimizers(self):
-        # Separate parameters for backbone and other parts of the model
-        backbone_params = list(self.model.backbone.parameters())
-        other_params = [p for n, p in self.model.named_parameters() if "backbone" not in n]
-
-        # Create optimizers
-        # 1. parameters except for backbone
-        # 2. backbone parameters
-        optimizer = torch.optim.AdamW(
-            [
-                {"params": other_params, "lr": self.hparams.base_lr},
-                {"params": backbone_params, "lr": self.hparams.backbone_lr},
-            ]
-        )
-
-        # Gradual unfreezing
-        total_steps = self.trainer.estimated_stepping_batches
-        unfreeze_schedule = [
-            (int(percent * total_steps), int(layers)) for layers, percent in self.hparams.unfreeze_schedule.items()
-        ]
-        self.step_to_unfrozen_layers = dict(sorted(unfreeze_schedule, key=lambda x: x[0], reverse=True))
-        self.current_unfrozen_layers = 0
-        logger.info(f"Unfreeze schedule: {self.step_to_unfrozen_layers}")
+        params = self.model.parameters()
+        optimizer = torch.optim.AdamW(params, lr=self.hparams.base_lr)
 
         # Calculate learning rate schedule
+        total_steps = self.trainer.estimated_stepping_batches
         warmup_steps = int(total_steps * self.hparams.warmup_percent)
-        backbone_start_steps = min(self.step_to_unfrozen_layers.keys()) if unfreeze_schedule else total_steps
+        lr_fn = partial(self.lr_fn, start_steps=0, warmup_steps=warmup_steps, total_steps=total_steps)
+        logger.info(f"LR Schedule: 0 -> {warmup_steps} -> {total_steps}")
 
-        # 1. parameters except for backbone: start from 0
-        other_lr_fn = partial(self.lr_fn, start_steps=0, warmup_steps=warmup_steps, total_steps=total_steps)
-        logger.info(f"Scheduling for other parameters: 0 -> {warmup_steps} -> {total_steps}")
-
-        # 2. backbone parameters: start from when backbone is partially unfrozen
-        backbone_lr_fn = partial(
-            self.lr_fn, start_steps=backbone_start_steps, warmup_steps=warmup_steps, total_steps=total_steps
-        )
-        logger.info(
-            f"Scheduling for backbone parameters: {backbone_start_steps} -> {backbone_start_steps + warmup_steps} -> {total_steps}"
-        )
-
-        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, [other_lr_fn, backbone_lr_fn])
+        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_fn)
         return {"optimizer": optimizer, "lr_scheduler": {"scheduler": scheduler, "interval": "step"}}
 
-    def on_fit_start(self):
-        if self.trainer.ckpt_path is not None:
-            logger.info(f"Loaded checkpoint from {self.trainer.ckpt_path}")
-        elif self.hparams.weight_path is not None:
-            state_dict = torch.load(self.hparams.weight_path)["state_dict"]
-            state_dict = {k.removeprefix("model."): v for k, v in state_dict.items()}
-            keys = [k for k in state_dict.keys() if "backbone" not in k]
+    # ===== Helpers =====
 
-            result = self.model.load_state_dict(state_dict, strict=False)
-            logger.info(f"Loaded weights from {self.hparams.weight_path}")
-            logger.info(f"Loaded non-backbone keys: {', '.join(keys)}")
-            if result.missing_keys:
-                logger.info(f"Missing keys: {', '.join(result.missing_keys)}")
-            if result.unexpected_keys:
-                logger.info(f"Unexpected keys: {', '.join(result.unexpected_keys)}")
+    def _get_class_frequencies(self, freq_path: str) -> torch.Tensor:
+        """Load class frequencies from frequency dict."""
+        with open(freq_path) as f:
+            freq_dict = json.load(f)
+
+        # Frequencies for each class (0-1 values)
+        freqs = torch.tensor(list(freq_dict.values()))
+        return freqs
+
+    def _get_class_weights(
+        self, freqs: torch.Tensor, method: Literal["sqrt", "log"], eps: float = 1e-4
+    ) -> torch.Tensor:
+        if method == "sqrt":
+            return 1 / torch.sqrt(freqs + eps)
+        elif method == "log":
+            return -torch.log(freqs + eps)  # +1 to handle zeros
         else:
-            # Load pretrained weights
-            self.model.load_wd_tagger_weights(self.hparams.num_tags, self.hparams.num_characters)
-        # Freeze loaded weights
-        self.model.freeze_loaded_weights()
+            raise ValueError(f"Invalid class reweighting method: {method}")
 
-    def on_train_batch_start(self, batch, batch_idx):
-        # Gradual unfreezing
-        for step, layers in self.step_to_unfrozen_layers.items():
-            if self.global_step >= step and layers > self.current_unfrozen_layers:
-                self.model.unfreeze_layers(layers)
-                self.current_unfrozen_layers = layers
+    def _get_frequency_bins(self, freqs: torch.Tensor, num_freq_bins: int) -> list[torch.Tensor]:
+        """Split classes into several frequency bins."""
+        # Calculate log frequencies
+        log_freqs = torch.log(freqs + 1)  # +1 to handle zeros
+
+        # Calculate quantiles for frequency bins
+        bin_edges = torch.quantile(log_freqs, torch.linspace(0, 1, num_freq_bins + 1))
+        bin_edges[-1] += 1  # Include the last element
+
+        # Assign each class to a frequency bin
+        bin_masks = []
+        for i, (low, high) in enumerate(zip(bin_edges[:-1], bin_edges[1:])):
+            mask = (log_freqs >= low) & (log_freqs < high)
+            # Skip empty bins
+            if mask.sum() > 0:
+                bin_masks.append(mask)
+        return bin_masks
 
     # ===== Metric Logging =====
 
@@ -394,27 +418,27 @@ class IllustMetricLearningModule(L.LightningModule):
     def _log_temperatures(self):
         if "tag" in self.hparams.tasks:
             if self.hparams.temp_strategy != "class":
-                self.log("model/tag/temperature", self.model.tag_temp)
+                self.log("model/tag/temperature", self.model.tag_temp.val)
             else:
-                self.log("model/tag/temperature", self.model.tag_temp.mean())
+                self.log("model/tag/temperature", self.model.tag_temp.val.mean())
                 self.logger.experiment.add_histogram(
-                    "model/tag/temperature_hist", self.model.tag_temp, global_step=self.global_step
+                    "model/tag/temperature_hist", self.model.tag_temp.val, global_step=self.global_step
                 )
         if "artist" in self.hparams.tasks:
             if self.hparams.temp_strategy != "class":
-                self.log("model/artist/temperature", self.model.artist_temp)
+                self.log("model/artist/temperature", self.model.artist_temp.val)
             else:
-                self.log("model/artist/temperature", self.model.artist_temp.mean())
+                self.log("model/artist/temperature", self.model.artist_temp.val.mean())
                 self.logger.experiment.add_histogram(
-                    "model/artist/temperature_hist", self.model.artist_temp, global_step=self.global_step
+                    "model/artist/temperature_hist", self.model.artist_temp.val, global_step=self.global_step
                 )
         if "character" in self.hparams.tasks:
             if self.hparams.temp_strategy != "class":
-                self.log("model/character/temperature", self.model.character_temp)
+                self.log("model/character/temperature", self.model.character_temp.val)
             else:
-                self.log("model/character/temperature", self.model.character_temp.mean())
+                self.log("model/character/temperature", self.model.character_temp.val.mean())
                 self.logger.experiment.add_histogram(
-                    "model/character/temperature_hist", self.model.character_temp, global_step=self.global_step
+                    "model/character/temperature_hist", self.model.character_temp.val, global_step=self.global_step
                 )
 
     def on_validation_epoch_end(self):

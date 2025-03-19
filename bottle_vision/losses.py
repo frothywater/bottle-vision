@@ -28,7 +28,6 @@ class LossWeights(TypedDict):
     artist: float = 1.0
     character: float = 1.0
     quality: float = 1.0
-    ortho: float = 1.0
 
 
 @dataclass
@@ -37,7 +36,6 @@ class LossComponents:
     artist: float = 0.0
     character: float = 0.0
     quality: float = 0.0
-    ortho: float = 0.0
 
     def weighted_sum(self, weights: LossWeights) -> torch.Tensor:
         return (
@@ -45,7 +43,6 @@ class LossComponents:
             + weights["artist"] * self.artist
             + weights["character"] * self.character
             + weights["quality"] * self.quality
-            + weights["ortho"] * self.ortho
         )
 
 
@@ -109,13 +106,17 @@ def central_contrastive_loss(
     contrast_loss = -torch.log(ratio + eps) * labels
 
     # central loss: minimize distance between positive samples and their centroids
-    central_loss = -2 * sim * labels
+    if params.central_weight > 0:
+        central_loss = -2 * sim * labels
+    else:
+        central_loss = 0.0
 
     loss = contrast_loss + params.central_weight * central_loss
     # return each part of the raw loss for monitoring
     label_sum = labels.sum(dim=1) + eps
     contrast_loss = (contrast_loss.sum(dim=1) / label_sum).mean()
-    central_loss = (central_loss.sum(dim=1) / label_sum).mean()
+    if params.central_weight > 0:
+        central_loss = (central_loss.sum(dim=1) / label_sum).mean()
 
     # reweight positive samples based on class weights
     if class_weights is not None:
