@@ -133,6 +133,7 @@ class IllustDataModule(L.LightningDataModule):
             prefetch_factor=self.hparams.prefetch_factor,
             collate_fn=self._collate_fn,
             pin_memory=True,
+            drop_last=True,
         )
 
     def predict_dataloader(self):
