@@ -2,6 +2,7 @@ lightning
 timm
 torch
 torchvision
+peft
 pyarrow
 matplotlib
 numpy

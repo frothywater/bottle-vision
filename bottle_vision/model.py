@@ -37,7 +37,7 @@ class ContrastivePrototypes(nn.Module):
 
     def __init__(self, num_classes: int, embed_dim: int):
         super().__init__()
-        self.weight = nn.Parameter(torch.randn(num_classes, embed_dim))
+        self.weight = nn.Parameter(F.normalize(torch.randn(num_classes, embed_dim), dim=1))
 
 
 class ContrastiveTemp(nn.Module):

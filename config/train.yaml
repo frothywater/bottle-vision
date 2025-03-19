@@ -4,7 +4,7 @@ trainer:
   devices: 1
   precision: bf16-mixed # Enable mixed precision training
   gradient_clip_val: 1.0
-  accumulate_grad_batches: 2
+  # accumulate_grad_batches: 2
   max_steps: 10000
   val_check_interval: 999 # batches
   check_val_every_n_epoch: null
@@ -39,7 +39,9 @@ model:
   artist_embed_dim: 256
   character_embed_dim: 256
   dropout: 0.1
-  tasks: [tag, character]
+  tasks: [tag]
+  copy_wd_weights: false
+  use_lora: false
   lora_config:
     r: 8
     lora_alpha: 16
@@ -53,7 +55,7 @@ model:
     character: 1.0
     quality: 1.0
   use_focal_loss: false
-  class_reweighting: true
+  class_reweighting: false
   class_reweighting_method: log
   temp_strategy: class
   tag_contrastive_config:
@@ -85,7 +87,7 @@ data:
   num_workers: 32
   image_size: 448
   label_smoothing_eps: 0.1
-  data_tasks: [tag, character]
+  data_tasks: [tag]
   sample_cutoff: 24
   train_tar_dir: ../danbooru2023/train
   valid_tar_dir: ../danbooru2023/valid
