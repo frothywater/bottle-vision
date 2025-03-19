@@ -9,9 +9,9 @@ echo "Downloading dataset..."
 if [ -z "$DATASET_DIR" ]; then
     DATASET_DIR=$(realpath ..)
 fi
-python script/download_dataset.py $DATASET_DIR danbooru2023/
-python script/download_dataset.py $DATASET_DIR weights/
-
+python script/download_dataset.py $DATASET_DIR danbooru2023/train-70k/
+python script/download_dataset.py $DATASET_DIR danbooru2023/train/ --max_tar_index 7
+python script/download_dataset.py $DATASET_DIR danbooru2023/valid/
 
 echo "Starting checkpoint monitor..."
 # Start the checkpoint monitor in the background
@@ -27,12 +27,9 @@ echo "Starting TensorBoard..."
 tensorboard --logdir=$EXP_DIR --host=0.0.0.0 --port=6006 &
 TB_PID=$!
 
-echo "Bootstrapping model weights..."
-python bootstrap_artist.py ../weights/0315-70k.ckpt ../weights/0315-70k-bootstraped.ckpt $EXP_DIR/artist_emb.pt config/train.yaml ../danbooru2023/train-400k/new_artist_random_indices.json
-
 echo "Starting training..."
 # Run the training script (assumed to be repo/train.py)
-python main.py fit --config config/train.yaml --model.weight_path ../weights/0315-70k-bootstraped.ckpt
+python main.py fit --config config/train.yaml
 TRAIN_EXIT_CODE=$?
 
 echo "Training finished with exit code $TRAIN_EXIT_CODE. Stopping pod..."
