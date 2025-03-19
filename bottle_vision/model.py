@@ -80,21 +80,31 @@ class IllustEmbeddingModel(nn.Module):
         character_temp: float,
         tasks: list[str],
         temp_strategy: Literal["fixed", "task", "class"],
+        use_pretrained_backbone: bool,
     ):
         super().__init__()
         self.tasks = tasks
 
         # Backbone
-        self.backbone = timm.create_model(
-            backbone_variant,
-            img_size=image_size,
-            num_classes=0,
-            class_token=cls_token,
-            reg_tokens=reg_tokens,
-            global_pool="token" if cls_token else "avg",
-            fc_norm=False,
-            act_layer="gelu_tanh",
-        )
+        if use_pretrained_backbone:
+            self.backbone = timm.create_model(
+                backbone_variant,
+                img_size=image_size,
+                num_classes=0,
+                pretrained=True,
+            )
+        else:
+            # Align with WD tagger model
+            self.backbone = timm.create_model(
+                backbone_variant,
+                img_size=image_size,
+                num_classes=0,
+                class_token=cls_token,
+                reg_tokens=reg_tokens,
+                global_pool="token" if cls_token else "avg",
+                fc_norm=False,
+                act_layer="gelu_tanh",
+            )
 
         self.hidden_dim = self.backbone.embed_dim
         self.dropout = nn.Dropout(dropout)

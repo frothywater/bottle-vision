@@ -68,6 +68,7 @@ class IllustMetricLearningModule(L.LightningModule):
         dropout: float = 0.1,
         # weights
         copy_wd_weights: bool = True,
+        use_pretrained_backbone: bool = False,
         use_lora: bool = True,
         lora_config: dict = {},
         strict_loading: bool = False,
@@ -111,6 +112,7 @@ class IllustMetricLearningModule(L.LightningModule):
             character_temp=character_contrastive_config["temp"],
             tasks=tasks,
             temp_strategy=temp_strategy,
+            use_pretrained_backbone=use_pretrained_backbone,
         )
 
         # Initialize model weights

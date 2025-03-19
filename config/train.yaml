@@ -31,7 +31,7 @@ model:
   num_tags: 8110
   num_artists: 1024
   num_characters: 2751
-  backbone_variant: vit_base_patch16_224
+  backbone_variant: vit_base_patch16_clip_224.openai
   cls_token: false
   reg_tokens: 0
   image_size: 448
@@ -41,6 +41,7 @@ model:
   dropout: 0.1
   tasks: [tag]
   copy_wd_weights: false
+  use_pretrained_backbone: true
   use_lora: false
   lora_config:
     r: 8
