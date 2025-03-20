@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Optional, TypedDict, Union
+from typing import Optional, TypedDict
 
 import torch
 
@@ -92,7 +92,7 @@ class LossComponents:
 def central_contrastive_loss(
     sim: torch.Tensor,
     labels: torch.Tensor,
-    temp: Union[float, torch.Tensor],
+    temp: torch.nn.Module,
     params: ContrastiveLossParams,
     eps: float = 1e-6,
     max_exp_value: float = 30.0,
@@ -134,11 +134,11 @@ def central_contrastive_loss(
         labels = labels[mask]
 
     # 1. Compute a per-sample shift to improve stability (log-sum-exp trick)
-    sim_div = sim / temp
-    shift = sim_div.max(dim=1, keepdim=True).values
+    scaled_sim = temp(sim)
+    shift = scaled_sim.max(dim=1, keepdim=True).values
 
     # 2. Negative exp sim
-    negatives = torch.exp(torch.clamp(sim_div - shift, max=max_exp_value)) * (1 - labels)
+    negatives = torch.exp(torch.clamp(scaled_sim - shift, max=max_exp_value)) * (1 - labels)
     # 2.1: Optionally sample a subset of hard negatives per sample
     if params.num_negatives is not None:
         # select top-k negative classes by similarity
@@ -151,7 +151,8 @@ def central_contrastive_loss(
     negatives = negatives.sum(dim=1, keepdim=True)
 
     # 3. Positive exp sim with margin
-    positives = torch.exp(torch.clamp(sim_div - shift - params.margin / temp, max=max_exp_value)) * labels
+    margin = temp(params.margin)
+    positives = torch.exp(torch.clamp(scaled_sim - shift - margin, max=max_exp_value)) * labels
     # 3.1: Focal modulation for positive samples
     if prob_preds is not None:
         positives *= (1 - prob_preds) ** focal_gamma

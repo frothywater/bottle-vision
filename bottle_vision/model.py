@@ -1,4 +1,5 @@
 import logging
+import math
 from dataclasses import dataclass
 from typing import Literal, Optional
 
@@ -41,25 +42,41 @@ class ContrastivePrototypes(nn.Module):
 
 
 class ContrastiveTemp(nn.Module):
-    """Contrastive temperature for multi-task metric learning model."""
+    """Contrastive temperature for multi-label metric learning model.
+    Use scaling factor and exp formulation: x / temp -> x * exp(-log(temp))."""
 
     def __init__(self, num_classes: int, temp: float | torch.Tensor, temp_strategy: Literal["fixed", "task", "class"]):
         super().__init__()
 
         if temp_strategy == "fixed":
             assert isinstance(temp, float), "Fixed temperature must be a float"
-            self.val = temp
+            self.neg_log_temp = -math.log(temp)
         elif temp_strategy == "task":
             assert isinstance(temp, float), "Task temperature must be a float"
-            self.val = nn.Parameter(torch.tensor(temp))
+            self.neg_log_temp = nn.Parameter(torch.tensor(-math.log(temp)))
         elif temp_strategy == "class":
             if isinstance(temp, float):
-                self.val = nn.Parameter(torch.ones(num_classes) * temp)
+                self.neg_log_temp = nn.Parameter(torch.full((num_classes,), -math.log(temp)))
             elif isinstance(temp, torch.Tensor):
                 assert temp.shape == (num_classes,), f"Class temperature shape mismatch: {temp.shape}"
-                self.val = nn.Parameter(temp)
+                self.neg_log_temp = nn.Parameter(-torch.log(temp))
         else:
             raise ValueError(f"Unknown temperature strategy: {temp_strategy}")
+
+    def forward(self, x: torch.Tensor):
+        return x * torch.exp(self.neg_log_temp)
+
+    def mean(self):
+        if isinstance(self.neg_log_temp, float):
+            return math.exp(self.neg_log_temp)
+        else:
+            return torch.exp(self.neg_log_temp).mean()
+
+    def value(self):
+        if isinstance(self.neg_log_temp, float):
+            return math.exp(self.neg_log_temp)
+        else:
+            return torch.exp(self.neg_log_temp)
 
 
 class IllustEmbeddingModel(nn.Module):
@@ -178,22 +195,22 @@ class IllustEmbeddingModel(nn.Module):
         if task == "tag":
             head = self.tag_head
             prototypes = self.tag_prototypes.weight
-            temp = self.tag_temp.val
+            temp = self.tag_temp
         elif task == "artist":
             head = self.artist_head
             prototypes = self.artist_prototypes.weight
-            temp = self.artist_temp.val
+            temp = self.artist_temp
         elif task == "character":
             head = self.character_head
             prototypes = self.character_prototypes.weight
-            temp = self.character_temp.val
+            temp = self.character_temp
         else:
             raise ValueError(f"Unknown task: {task}")
 
         # Compute embeddings and similarities
         embeddings = head(self.dropout(features))
         similarities = F.normalize(embeddings, dim=1) @ F.normalize(prototypes, dim=1).T
-        probs = torch.sigmoid(similarities / temp)
+        probs = torch.sigmoid(temp(similarities))
 
         # Compute loss with class weights
         loss, contrast_loss, central_loss = central_contrastive_loss(

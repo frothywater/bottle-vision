@@ -499,28 +499,22 @@ class IllustMetricLearningModule(L.LightningModule):
 
     def _log_temperatures(self):
         if "tag" in self.hparams.tasks:
-            if self.hparams.temp_strategy != "class":
-                self.log("model/tag/temperature", self.model.tag_temp.val)
-            else:
-                self.log("model/tag/temperature", self.model.tag_temp.val.mean())
+            self.log("model/tag/temperature", self.model.tag_temp.mean())
+            if self.hparams.temp_strategy == "class":
                 self.logger.experiment.add_histogram(
-                    "model/tag/temperature_hist", self.model.tag_temp.val, global_step=self.global_step
+                    "model/tag/temperature_hist", self.model.tag_temp.value(), global_step=self.global_step
                 )
         if "artist" in self.hparams.tasks:
-            if self.hparams.temp_strategy != "class":
-                self.log("model/artist/temperature", self.model.artist_temp.val)
-            else:
-                self.log("model/artist/temperature", self.model.artist_temp.val.mean())
+            self.log("model/artist/temperature", self.model.artist_temp.mean())
+            if self.hparams.temp_strategy == "class":
                 self.logger.experiment.add_histogram(
-                    "model/artist/temperature_hist", self.model.artist_temp.val, global_step=self.global_step
+                    "model/artist/temperature_hist", self.model.artist_temp.value(), global_step=self.global_step
                 )
         if "character" in self.hparams.tasks:
-            if self.hparams.temp_strategy != "class":
-                self.log("model/character/temperature", self.model.character_temp.val)
-            else:
-                self.log("model/character/temperature", self.model.character_temp.val.mean())
+            self.log("model/character/temperature", self.model.character_temp.mean())
+            if self.hparams.temp_strategy == "class":
                 self.logger.experiment.add_histogram(
-                    "model/character/temperature_hist", self.model.character_temp.val, global_step=self.global_step
+                    "model/character/temperature_hist", self.model.character_temp.value(), global_step=self.global_step
                 )
 
     def on_validation_epoch_end(self):
