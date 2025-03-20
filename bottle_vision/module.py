@@ -121,9 +121,14 @@ class IllustMetricLearningModule(L.LightningModule):
         artist_temp, artist_margin = self._get_temp_margin(artist_contrastive_config, self.artist_freqs)
         character_temp, character_margin = self._get_temp_margin(character_contrastive_config, self.character_freqs)
 
-        self.tag_params = ContrastiveLossParams.from_config(tag_contrastive_config, tag_margin)
-        self.artist_params = ContrastiveLossParams.from_config(artist_contrastive_config, artist_margin)
-        self.character_params = ContrastiveLossParams.from_config(character_contrastive_config, character_margin)
+        self.tag_params = ContrastiveLossParams.from_config(tag_contrastive_config, num_tags, tag_margin)
+        self.artist_params = ContrastiveLossParams.from_config(artist_contrastive_config, num_artists, artist_margin)
+        self.character_params = ContrastiveLossParams.from_config(
+            character_contrastive_config, num_characters, character_margin
+        )
+        logger.info(
+            f"Number of negative classes: tag={self.tag_params.num_negatives}, artist={self.artist_params.num_negatives}, character={self.character_params.num_negatives}"
+        )
 
         # Create model architecture
         self.model = IllustEmbeddingModel(

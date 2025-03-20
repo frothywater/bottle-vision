@@ -12,6 +12,7 @@ class ContrastiveLossConfig(TypedDict, total=False):
     max_temp: float
     min_margin: float
     max_margin: float
+    negative_percent: float
 
     @staticmethod
     def default() -> "ContrastiveLossConfig":
@@ -23,6 +24,7 @@ class ContrastiveLossConfig(TypedDict, total=False):
             max_temp=None,
             min_margin=None,
             max_margin=None,
+            negative_percent=None,
         )
 
     @staticmethod
@@ -36,12 +38,16 @@ class ContrastiveLossConfig(TypedDict, total=False):
 class ContrastiveLossParams:
     margin: float | torch.Tensor
     central_weight: float
+    num_negatives: Optional[int] = None
 
     @staticmethod
-    def from_config(config: ContrastiveLossConfig, margin: Optional[torch.Tensor] = None) -> "ContrastiveLossParams":
+    def from_config(
+        config: ContrastiveLossConfig, num_classes: int, margin: Optional[torch.Tensor] = None
+    ) -> "ContrastiveLossParams":
         return ContrastiveLossParams(
             margin=margin if margin is not None else config["margin"],
             central_weight=config["central_weight"],
+            num_negatives=int(num_classes * config["negative_percent"]) if config["negative_percent"] else None,
         )
 
 
@@ -103,7 +109,11 @@ def central_contrastive_loss(
         temp: Temperature parameter
         params: Contrastive loss parameters
         eps: Small value to avoid numerical instability
-        mask: Bool mask for positive labels of shape (N,)
+        max_exp_value: Maximum value for clamping exponentials to avoid overflow
+        mask: Bool mask for samples with at least one positive label, shape (N,)
+        focal_gamma: Gamma parameter for focal modulation on positives
+        class_weights: Class weights to reweight positives
+        prob_preds: Probabilities for focal modulation on positives
 
     Returns:
         Loss value as a scalar tensor
@@ -116,54 +126,65 @@ def central_contrastive_loss(
     Note:
         Too small eps (1e-8) for fp16 training may cause NaN loss values.
     """
+    # 0. Mask out samples with no positive labels. If all labels are negative, return zero loss.
     if mask is not None:
-        # mask out samples with no positive labels
-        # if all labels are negative, return zero loss
         if not mask.any():
             return 0.0, 0.0, 0.0
         sim = sim[mask]
         labels = labels[mask]
 
-    # compute a per-sample shift to improve stability (log-sum-exp trick)
+    # 1. Compute a per-sample shift to improve stability (log-sum-exp trick)
     sim_div = sim / temp
     shift = sim_div.max(dim=1, keepdim=True).values
 
-    # negative samples, broadcasted
+    # 2. Negative exp sim
     negatives = torch.exp(torch.clamp(sim_div - shift, max=max_exp_value)) * (1 - labels)
+    # 2.1: Optionally sample a subset of hard negatives per sample
+    if params.num_negatives is not None:
+        # select top-k negative classes by similarity
+        topk_indices = negatives.topk(params.num_negatives, dim=1, largest=True).indices
+        # zero out all but top-k negatives
+        topk_mask = torch.zeros_like(negatives)
+        topk_mask.scatter_(1, topk_indices, 1.0)
+        negatives *= topk_mask
+    # sum over negative classes
     negatives = negatives.sum(dim=1, keepdim=True)
 
-    # positive samples
+    # 3. Positive exp sim with margin
     positives = torch.exp(torch.clamp(sim_div - shift - params.margin / temp, max=max_exp_value)) * labels
-    # focal modulation
+    # 3.1: Focal modulation for positive samples
     if prob_preds is not None:
         positives *= (1 - prob_preds) ** focal_gamma
 
-    # log ratio, mask out negative samples
+    # 4.1 Contrastive loss: multilabel softmax, maximize positive to negative ratio
     ratio = positives / (positives + negatives + eps)
     contrast_loss = -torch.log(ratio + eps) * labels
 
-    # central loss: minimize distance between positive samples and their centroids
+    # 4.2: Central loss: minimize distance between positive samples and their centroids
     if params.central_weight > 0:
         central_loss = -2 * sim * labels
     else:
         central_loss = 0.0
 
+    # 4: Combine contrastive and central loss
     loss = contrast_loss + params.central_weight * central_loss
-    # return each part of the raw loss for monitoring
-    label_sum = labels.sum(dim=1) + eps
-    contrast_loss = (contrast_loss.sum(dim=1) / label_sum).mean()
-    if params.central_weight > 0:
-        central_loss = (central_loss.sum(dim=1) / label_sum).mean()
 
-    # reweight positive samples based on class weights
+    # 5. Return each part of the raw loss for monitoring
+    label_sum = labels.sum(dim=1) + eps
+    contrast_loss_mean = (contrast_loss.sum(dim=1) / label_sum).mean()
+    if params.central_weight > 0:
+        central_loss_mean = (central_loss.sum(dim=1) / label_sum).mean()
+    else:
+        central_loss_mean = 0.0
+
+    # 6. Reweight positive samples based on class weights
     if class_weights is not None:
         positive_mask = labels.round().bool()
         loss = torch.where(positive_mask, loss * class_weights, loss)
         labels = torch.where(positive_mask, labels * class_weights, labels)
 
-    # average over positive labels
+    # 7. average over positive labels, then over samples
     loss = loss.sum(dim=1) / (labels.sum(dim=1) + eps)
-    # average over samples
     loss = loss.mean()
 
-    return loss, contrast_loss, central_loss
+    return loss, contrast_loss_mean, central_loss_mean
