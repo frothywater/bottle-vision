@@ -1,33 +1,70 @@
 from dataclasses import dataclass
-from typing import TypedDict, Union
+from typing import Optional, TypedDict, Union
 
 import torch
 
 
-class ContrastiveLossConfig(TypedDict):
-    temp: float = 0.1
-    margin: float = 0.2
-    central_weight: float = 1.5
+class ContrastiveLossConfig(TypedDict, total=False):
+    temp: float
+    margin: float
+    central_weight: float
+    min_temp: float
+    max_temp: float
+    min_margin: float
+    max_margin: float
+
+    @staticmethod
+    def default() -> "ContrastiveLossConfig":
+        return ContrastiveLossConfig(
+            temp=0.1,
+            margin=0.2,
+            central_weight=1.5,
+            min_temp=None,
+            max_temp=None,
+            min_margin=None,
+            max_margin=None,
+        )
+
+    @staticmethod
+    def create(**kwargs) -> "ContrastiveLossConfig":
+        _kwargs = ContrastiveLossConfig.default()
+        _kwargs.update(kwargs)
+        return ContrastiveLossConfig(**_kwargs)
 
 
 @dataclass
 class ContrastiveLossParams:
-    margin: float
+    margin: float | torch.Tensor
     central_weight: float
 
     @staticmethod
-    def from_config(config: ContrastiveLossConfig) -> "ContrastiveLossParams":
+    def from_config(config: ContrastiveLossConfig, margin: Optional[torch.Tensor] = None) -> "ContrastiveLossParams":
         return ContrastiveLossParams(
-            margin=config["margin"],
+            margin=margin if margin is not None else config["margin"],
             central_weight=config["central_weight"],
         )
 
 
-class LossWeights(TypedDict):
-    tag: float = 1.0
-    artist: float = 1.0
-    character: float = 1.0
-    quality: float = 1.0
+class LossWeights(TypedDict, total=False):
+    tag: float
+    artist: float
+    character: float
+    quality: float
+
+    @staticmethod
+    def default() -> "LossWeights":
+        return LossWeights(
+            tag=1.0,
+            artist=1.0,
+            character=1.0,
+            quality=1.0,
+        )
+
+    @staticmethod
+    def create(**kwargs) -> "LossWeights":
+        _kwargs = LossWeights.default()
+        _kwargs.update(kwargs)
+        return LossWeights(**_kwargs)
 
 
 @dataclass

@@ -63,6 +63,7 @@ class IllustMetricLearningModule(L.LightningModule):
         tag_embed_dim: int = 512,
         artist_embed_dim: int = 128,
         character_embed_dim: int = 128,
+        skip_head: bool = False,
         cls_token: bool = False,
         reg_tokens: int = 0,
         dropout: float = 0.1,
@@ -79,20 +80,50 @@ class IllustMetricLearningModule(L.LightningModule):
         warmup_percent: float = 0.05,
         weight_path: Optional[str] = None,
         # loss
-        loss_weights: LossWeights = LossWeights(),
+        loss_weights: LossWeights = {},
         use_focal_loss: bool = False,
         class_reweighting: bool = False,
         class_reweighting_method: Literal["sqrt", "log"] = "sqrt",
         temp_strategy: Literal["fixed", "task", "class"] = "fixed",
-        tag_contrastive_config: ContrastiveLossConfig = ContrastiveLossConfig(),
-        artist_contrastive_config: ContrastiveLossConfig = ContrastiveLossConfig(),
-        character_contrastive_config: ContrastiveLossConfig = ContrastiveLossConfig(),
+        tag_contrastive_config: ContrastiveLossConfig = {},
+        artist_contrastive_config: ContrastiveLossConfig = {},
+        character_contrastive_config: ContrastiveLossConfig = {},
         # metric
         num_freq_bins: int = 5,
     ):
         super().__init__()
         self.save_hyperparameters()
         self.strict_loading = strict_loading
+        self.loss_weights = LossWeights.create(**loss_weights)
+
+        # Load and process class frequencies
+        self.tag_freqs = self._get_class_frequencies(tag_freq_path)
+        self.character_freqs = self._get_class_frequencies(character_freq_path)
+        self.artist_freqs = self._get_class_frequencies(artist_freq_path)
+
+        # Get class weights
+        if class_reweighting:
+            self.tag_weights = self._get_class_weights(self.tag_freqs, class_reweighting_method)
+            self.artist_weights = self._get_class_weights(self.artist_freqs, class_reweighting_method)
+            self.character_weights = self._get_class_weights(self.character_freqs, class_reweighting_method)
+
+        # Get frequency bins
+        self.tag_bins = self._get_frequency_bins(self.tag_freqs, num_freq_bins)
+        self.artist_bins = self._get_frequency_bins(self.artist_freqs, num_freq_bins)
+        self.character_bins = self._get_frequency_bins(self.character_freqs, num_freq_bins)
+
+        # Prepare temperature and margin values
+        tag_contrastive_config = ContrastiveLossConfig.create(**tag_contrastive_config)
+        artist_contrastive_config = ContrastiveLossConfig.create(**artist_contrastive_config)
+        character_contrastive_config = ContrastiveLossConfig.create(**character_contrastive_config)
+
+        tag_temp, tag_margin = self._get_temp_margin(tag_contrastive_config, self.tag_freqs)
+        artist_temp, artist_margin = self._get_temp_margin(artist_contrastive_config, self.artist_freqs)
+        character_temp, character_margin = self._get_temp_margin(character_contrastive_config, self.character_freqs)
+
+        self.tag_params = ContrastiveLossParams.from_config(tag_contrastive_config, tag_margin)
+        self.artist_params = ContrastiveLossParams.from_config(artist_contrastive_config, artist_margin)
+        self.character_params = ContrastiveLossParams.from_config(character_contrastive_config, character_margin)
 
         # Create model architecture
         self.model = IllustEmbeddingModel(
@@ -104,12 +135,13 @@ class IllustMetricLearningModule(L.LightningModule):
             tag_embed_dim=tag_embed_dim,
             artist_embed_dim=artist_embed_dim,
             character_embed_dim=character_embed_dim,
+            skip_head=skip_head,
             cls_token=cls_token,
             reg_tokens=reg_tokens,
             dropout=dropout,
-            tag_temp=tag_contrastive_config["temp"],
-            artist_temp=artist_contrastive_config["temp"],
-            character_temp=character_contrastive_config["temp"],
+            tag_temp=tag_temp,
+            artist_temp=artist_temp,
+            character_temp=character_temp,
             tasks=tasks,
             temp_strategy=temp_strategy,
             use_pretrained_backbone=use_pretrained_backbone,
@@ -117,21 +149,6 @@ class IllustMetricLearningModule(L.LightningModule):
 
         # Initialize model weights
         self.init_model()
-
-        # Load and process class frequencies
-        self.tag_freqs = self._get_class_frequencies(tag_freq_path)
-        self.character_freqs = self._get_class_frequencies(character_freq_path)
-        self.artist_freqs = self._get_class_frequencies(artist_freq_path)
-
-        # Get class weights
-        self.tag_weights = self._get_class_weights(self.tag_freqs, class_reweighting_method)
-        self.artist_weights = self._get_class_weights(self.artist_freqs, class_reweighting_method)
-        self.character_weights = self._get_class_weights(self.character_freqs, class_reweighting_method)
-
-        # Get frequency bins
-        self.tag_bins = self._get_frequency_bins(self.tag_freqs, num_freq_bins)
-        self.artist_bins = self._get_frequency_bins(self.artist_freqs, num_freq_bins)
-        self.character_bins = self._get_frequency_bins(self.character_freqs, num_freq_bins)
 
         # Initialize metrics
         self.val_metrics = self._create_metrics("val")
@@ -170,7 +187,7 @@ class IllustMetricLearningModule(L.LightningModule):
             self.model = peft.get_peft_model(self.model, lora_config)
 
             self.model.print_trainable_parameters()
-            logger.info(f"LoRA Config: {lora_config}")
+            logger.debug(f"LoRA Config: {lora_config}")
             peft_state_dict = self._get_peft_model_state_dict()
             trainable_keys = [k.removeprefix("base_model.model.") for k in peft_state_dict.keys()]
             logger.info(f"LoRA trainable modules: {', '.join(trainable_keys)}")
@@ -218,7 +235,13 @@ class IllustMetricLearningModule(L.LightningModule):
 
     def training_step(self, batch: IllustDatasetItem, batch_idx: int):
         task = batch.task[0]
-        params = ContrastiveLossParams.from_config(self.hparams[f"{task}_contrastive_config"])
+        params: ContrastiveLossParams = self.__getattribute__(f"{task}_params")
+        if isinstance(params.margin, torch.Tensor) and params.margin.device != batch.image.device:
+            params = ContrastiveLossParams(
+                margin=params.margin.to(batch.image.device),
+                central_weight=params.central_weight,
+            )
+            self.__setattr__(f"{task}_params", params)
 
         if self.hparams.class_reweighting:
             class_weights = self.__getattribute__(f"{task}_weights")
@@ -238,7 +261,7 @@ class IllustMetricLearningModule(L.LightningModule):
         )
 
         # Compute total loss
-        total_loss = output.losses.weighted_sum(self.hparams.loss_weights)
+        total_loss = output.losses.weighted_sum(self.loss_weights)
         if self.trainer.accumulate_grad_batches > 1:
             total_loss /= self.trainer.accumulate_grad_batches
 
@@ -255,15 +278,19 @@ class IllustMetricLearningModule(L.LightningModule):
         if batch.tag_label is not None and "tag" in self.hparams.tasks:
             labels["tag"] = batch.tag_label
             masks["tag"] = batch.tag_mask
-            params["tag"] = ContrastiveLossParams.from_config(self.hparams.tag_contrastive_config)
+            params["tag"] = self.tag_params
         if batch.artist_label is not None and "artist" in self.hparams.tasks:
             labels["artist"] = batch.artist_label
             masks["artist"] = batch.artist_mask
-            params["artist"] = ContrastiveLossParams.from_config(self.hparams.artist_contrastive_config)
+            params["artist"] = self.artist_params
         if batch.character_label is not None and "character" in self.hparams.tasks:
             labels["character"] = batch.character_label
             masks["character"] = batch.character_mask
-            params["character"] = ContrastiveLossParams.from_config(self.hparams.character_contrastive_config)
+            params["character"] = self.character_params
+
+        for k, p in params.items():
+            if isinstance(p.margin, torch.Tensor) and p.margin.device != batch.image.device:
+                params[k].margin = p.margin.to(batch.image.device)
 
         # Forward for all tasks
         output: ModelOutput = self.model.forward_all_tasks(
@@ -276,7 +303,7 @@ class IllustMetricLearningModule(L.LightningModule):
         )
 
         # Compute total loss
-        total_loss = output.losses.weighted_sum(self.hparams.loss_weights)
+        total_loss = output.losses.weighted_sum(self.loss_weights)
 
         # Log all metrics
         self.log_dict(log_dict("val", output, total_loss), batch_size=batch.image.shape[0])
@@ -345,33 +372,70 @@ class IllustMetricLearningModule(L.LightningModule):
         freqs = torch.tensor(list(freq_dict.values()))
         return freqs
 
-    def _get_class_weights(
-        self, freqs: torch.Tensor, method: Literal["sqrt", "log"], eps: float = 1e-4
-    ) -> torch.Tensor:
-        if method == "sqrt":
-            return 1 / torch.sqrt(freqs + eps)
-        elif method == "log":
-            return -torch.log(freqs + eps)  # +1 to handle zeros
-        else:
-            raise ValueError(f"Invalid class reweighting method: {method}")
+    def _get_normalized_frequencies(self, freqs: torch.Tensor) -> torch.Tensor:
+        # find the first non-zero frequency
+        f_min = freqs[freqs > 0].min()
+        f_max = freqs.max()
+        freqs = freqs.clamp_min(f_min)
+        return (freqs.log() - f_min.log()) / (f_max.log() - f_min.log())
 
     def _get_frequency_bins(self, freqs: torch.Tensor, num_freq_bins: int) -> list[torch.Tensor]:
         """Split classes into several frequency bins."""
-        # Calculate log frequencies
-        log_freqs = torch.log(freqs + 1)  # +1 to handle zeros
-
         # Calculate quantiles for frequency bins
-        bin_edges = torch.quantile(log_freqs, torch.linspace(0, 1, num_freq_bins + 1))
+        bin_edges = torch.quantile(freqs, torch.linspace(0, 1, num_freq_bins + 1))
         bin_edges[-1] += 1  # Include the last element
 
         # Assign each class to a frequency bin
         bin_masks = []
         for i, (low, high) in enumerate(zip(bin_edges[:-1], bin_edges[1:])):
-            mask = (log_freqs >= low) & (log_freqs < high)
+            # Mask out empty classes
+            mask = (freqs >= low) & (freqs < high) & (freqs > 0)
             # Skip empty bins
             if mask.sum() > 0:
                 bin_masks.append(mask)
         return bin_masks
+
+    def _get_class_weights(
+        self, freqs: torch.Tensor, method: Literal["sqrt", "log"], eps: float = 1e-4
+    ) -> torch.Tensor:
+        if method == "sqrt":
+            result = 1 / torch.sqrt(freqs + eps)
+            logger.info(
+                f"Using sqrt class reweighting: min={result.min().item():.3f}, max={result.max().item():.3f}, mean={result.mean().item():.3f}"
+            )
+            return result
+        elif method == "log":
+            result = -torch.log(freqs + eps)
+            logger.info(
+                f"Using log class reweighting: min={result.min().item():.3f}, max={result.max().item():.3f}, mean={result.mean().item():.3f}"
+            )
+            return result
+        else:
+            raise ValueError(f"Invalid class reweighting method: {method}")
+
+    def _get_temp_margin(
+        self, config: ContrastiveLossConfig, freqs: torch.Tensor
+    ) -> tuple[float | torch.Tensor, float | torch.Tensor]:
+        """If given min and max temperature/margin in the config, make temp/margin per class."""
+        norm_freqs = self._get_normalized_frequencies(freqs)
+
+        if config["min_temp"] is not None and config["max_temp"] is not None:
+            temp = config["min_temp"] + norm_freqs * (config["max_temp"] - config["min_temp"])
+            logger.info(
+                f"Using per-class temperature: min={temp.min().item():.3f}, max={temp.max().item():.3f}, mean={temp.mean().item():.3f}"
+            )
+        else:
+            temp = config["temp"]
+
+        if config["min_margin"] is not None and config["max_margin"] is not None:
+            margin = config["min_margin"] + norm_freqs * (config["max_margin"] - config["min_margin"])
+            logger.info(
+                f"Using per-class margin: min={margin.min().item():.3f}, max={margin.max().item():.3f}, mean={margin.mean().item():.3f}"
+            )
+        else:
+            margin = config["margin"]
+
+        return temp, margin
 
     # ===== Metric Logging =====
 
@@ -493,8 +557,7 @@ class IllustMetricLearningModule(L.LightningModule):
 
             # Create and log AP vs frequency plot
             freqs = self.__getattribute__(f"{task}_freqs")
-            log_freqs = torch.log(freqs + 1)  # +1 to handle zeros
-            fig = self._plot_ap_vs_frequency(ap_scores, log_freqs, f"AP vs Frequency ({task})")
+            fig = self._plot_ap_vs_frequency(ap_scores, freqs, f"AP vs Frequency ({task})")
             self.logger.experiment.add_figure(f"{stage}/{task}/ap_vs_freq", fig, global_step=self.global_step)
             plt.close(fig)
 
@@ -508,14 +571,18 @@ class IllustMetricLearningModule(L.LightningModule):
             # Reset metrics after computing
             metric_collection.reset()
 
-    def _plot_ap_vs_frequency(self, ap_scores: torch.Tensor, log_freqs: torch.Tensor, title: str) -> plt.Figure:
+    def _plot_ap_vs_frequency(self, ap_scores: torch.Tensor, freqs: torch.Tensor, title: str) -> plt.Figure:
         """Create scatter plot of AP scores vs log frequencies."""
         fig, ax = plt.subplots(figsize=(10, 8))
 
-        log_freqs = log_freqs.cpu().numpy()
+        mask = freqs > 0
+        freqs = self._get_normalized_frequencies(freqs[mask])
+        ap_scores = ap_scores[mask]
+        freqs = freqs.cpu().numpy()
         ap_scores = ap_scores.cpu().numpy()
-        ax.scatter(log_freqs, ap_scores, alpha=0.5, s=10)
-        ax.set_xlabel("Log Frequency")
+
+        ax.scatter(freqs, ap_scores, alpha=0.5, s=10)
+        ax.set_xlabel("Normalized Frequency")
         ax.set_ylabel("Average Precision")
         ax.set_title(title)
         ax.grid(True, alpha=0.3)

@@ -43,15 +43,21 @@ class ContrastivePrototypes(nn.Module):
 class ContrastiveTemp(nn.Module):
     """Contrastive temperature for multi-task metric learning model."""
 
-    def __init__(self, num_classes: int, temp: float, temp_strategy: Literal["fixed", "task", "class"]):
+    def __init__(self, num_classes: int, temp: float | torch.Tensor, temp_strategy: Literal["fixed", "task", "class"]):
         super().__init__()
 
         if temp_strategy == "fixed":
+            assert isinstance(temp, float), "Fixed temperature must be a float"
             self.val = temp
         elif temp_strategy == "task":
+            assert isinstance(temp, float), "Task temperature must be a float"
             self.val = nn.Parameter(torch.tensor(temp))
         elif temp_strategy == "class":
-            self.val = nn.Parameter(torch.ones(1, num_classes) * temp)
+            if isinstance(temp, float):
+                self.val = nn.Parameter(torch.ones(num_classes) * temp)
+            elif isinstance(temp, torch.Tensor):
+                assert temp.shape == (num_classes,), f"Class temperature shape mismatch: {temp.shape}"
+                self.val = nn.Parameter(temp)
         else:
             raise ValueError(f"Unknown temperature strategy: {temp_strategy}")
 
@@ -72,12 +78,13 @@ class IllustEmbeddingModel(nn.Module):
         tag_embed_dim: int,
         artist_embed_dim: int,
         character_embed_dim: int,
+        skip_head: bool,
         cls_token: bool,
         reg_tokens: int,
         dropout: float,
-        tag_temp: float,
-        artist_temp: float,
-        character_temp: float,
+        tag_temp: float | torch.Tensor,
+        artist_temp: float | torch.Tensor,
+        character_temp: float | torch.Tensor,
         tasks: list[str],
         temp_strategy: Literal["fixed", "task", "class"],
         use_pretrained_backbone: bool,
@@ -112,8 +119,12 @@ class IllustEmbeddingModel(nn.Module):
         # Projection heads and prototypes
         self.trainable_module_names = []
         if "tag" in tasks:
-            self.tag_head = nn.Linear(self.hidden_dim, tag_embed_dim, bias=False)
-            nn.init.orthogonal_(self.tag_head.weight)
+            if skip_head and tag_embed_dim == self.hidden_dim:
+                logger.info("Skipping tag head, using backbone embeddings")
+                self.tag_head = nn.Identity()
+            else:
+                self.tag_head = nn.Linear(self.hidden_dim, tag_embed_dim, bias=False)
+                nn.init.orthogonal_(self.tag_head.weight)
 
             self.tag_prototypes = ContrastivePrototypes(num_tags, tag_embed_dim)
             self.tag_temp = ContrastiveTemp(num_tags, tag_temp, temp_strategy)

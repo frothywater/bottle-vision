@@ -31,21 +31,22 @@ model:
   num_tags: 8110
   num_artists: 1024
   num_characters: 2751
-  backbone_variant: vit_base_patch16_clip_224.openai
+  backbone_variant: vit_base_patch16_224
   cls_token: false
   reg_tokens: 0
   image_size: 448
   tag_embed_dim: 768
   artist_embed_dim: 256
   character_embed_dim: 256
+  skip_head: true
   dropout: 0.1
   tasks: [tag]
-  copy_wd_weights: false
-  use_pretrained_backbone: true
-  use_lora: false
+  copy_wd_weights: true
+  use_pretrained_backbone: false
+  use_lora: true
   lora_config:
-    r: 8
-    lora_alpha: 16
+    r: 16
+    lora_alpha: 32
     lora_dropout: 0.1
     bias: lora_only
     target_modules: [attn.qkv, attn.proj, mlp.fc1, mlp.fc2]
@@ -60,8 +61,10 @@ model:
   class_reweighting_method: log
   temp_strategy: class
   tag_contrastive_config:
-    temp: 0.06
-    margin: 0.2
+    min_temp: 0.05
+    max_temp: 0.2
+    min_margin: 0.05
+    max_margin: 0.3
     central_weight: 0.0
   artist_contrastive_config:
     temp: 0.06
