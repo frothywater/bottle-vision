@@ -9,9 +9,10 @@ echo "Downloading dataset..."
 if [ -z "$DATASET_DIR" ]; then
     DATASET_DIR=$(realpath ..)
 fi
-python script/download_dataset.py $DATASET_DIR danbooru2023/train-70k/
-python script/download_dataset.py $DATASET_DIR danbooru2023/train/ --max_tar_index 7
+python script/download_dataset.py $DATASET_DIR danbooru2023/train-400k/
+python script/download_dataset.py $DATASET_DIR danbooru2023/train/
 python script/download_dataset.py $DATASET_DIR danbooru2023/valid/
+python script/download_dataset.py $DATASET_DIR weights/
 
 echo "Starting checkpoint monitor..."
 # Start the checkpoint monitor in the background
@@ -29,7 +30,7 @@ TB_PID=$!
 
 echo "Starting training..."
 # Run the training script (assumed to be repo/train.py)
-python main.py fit --config config/train.yaml
+python main.py fit --config config/train.yaml --model.weight_path $DATASET_DIR/weights/0320-70k-tag-lora.ckpt
 TRAIN_EXIT_CODE=$?
 
 echo "Training finished with exit code $TRAIN_EXIT_CODE. Stopping pod..."
