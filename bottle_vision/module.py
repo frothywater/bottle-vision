@@ -272,7 +272,8 @@ class IllustMetricLearningModule(L.LightningModule):
 
         # Log all metrics
         self.log_dict(log_dict("train", output, total_loss), batch_size=batch.image.shape[0])
-        self._log_temperatures()
+        if self.global_step % 100 == 0:
+            self._log_temperatures()
 
         return total_loss
 
