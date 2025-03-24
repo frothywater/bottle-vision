@@ -54,7 +54,7 @@ class IllustDataset(Dataset):
         label_smoothing_eps: float = 0,
     ):
         super().__init__()
-        self.table = pq.read_table(parquet_path)
+        self.table = pq.read_table(parquet_path, use_threads=False)
         self.tar_dir = tar_dir
         self.num_tags = num_tags
         self.num_artists = num_artists

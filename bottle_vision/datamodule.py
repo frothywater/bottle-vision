@@ -84,7 +84,7 @@ class IllustDataModule(L.LightningDataModule):
 
         # Balanced class batch sampler for training
         samplers = {}
-        sample_cutoff = self.hparams.sample_cutoff
+        sample_cutoff = self.hparams.sample_cutoff or {}
         if isinstance(sample_cutoff, int):
             sample_cutoff = {task: sample_cutoff for task in task_dicts.keys()}
         for task, indices_dict in task_dicts.items():
@@ -93,7 +93,7 @@ class IllustDataModule(L.LightningDataModule):
                 indices_dict=indices_dict,
                 classes_per_batch=self.hparams.classes_per_batch,
                 samples_per_class=self.hparams.samples_per_class,
-                sample_cutoff=sample_cutoff[task],
+                sample_cutoff=sample_cutoff[task] if task in sample_cutoff else None,
             )
 
         # Interleaved batch sampler for different tasks

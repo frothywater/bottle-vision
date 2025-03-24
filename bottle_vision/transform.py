@@ -71,7 +71,7 @@ class CustomRandomCrop(T.Transform):
 
 class RGBToBGR(T.Transform):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return x[[2, 1, 0], :, :]
+        return x.flip(0)
 
 
 def get_plain_transforms(image_size: int, mean: list[float], std: list[float]):
@@ -94,7 +94,7 @@ def get_content_transforms(image_size: int, mean: list[float], std: list[float])
             T.ToImage(),
             CustomResize(size=image_size, interpolation=InterpolationMode.BICUBIC),
             T.RandomHorizontalFlip(p=0.25),
-            T.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.02),
+            # T.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.02),
             PadSquare(fill=255),
             T.ToDtype(torch.float32, scale=True),
             T.Normalize(mean=mean, std=std),
