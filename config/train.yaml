@@ -3,9 +3,9 @@ trainer:
   accelerator: auto
   precision: bf16-mixed # Enable mixed precision training
   gradient_clip_val: 1.0
-  # accumulate_grad_batches: 4
+  accumulate_grad_batches: 2
   max_steps: 10000
-  val_check_interval: 999 # batches
+  val_check_interval: 1999 # batches
   check_val_every_n_epoch: null
   default_root_dir: exp
   log_every_n_steps: 10
@@ -47,7 +47,7 @@ model:
     lora_alpha: 32
     lora_dropout: 0.1
     bias: lora_only
-    target_modules: [attn.qkv, attn.proj, mlp.fc1, mlp.fc2]
+    target_modules: [attn.qkv, attn.proj]
     layers_to_transform: [8, 9, 10, 11]
   loss_weights:
     tag: 1.0
@@ -59,12 +59,12 @@ model:
   class_reweighting_method: log
   temp_strategy: class
   tag_contrastive_config:
-    min_temp: 0.05
+    min_temp: 0.0625
     max_temp: 0.25
     min_margin: 0.1
-    max_margin: 0.3
+    max_margin: 0.2
     central_weight: 0.0
-    negative_percent: 0.1
+    # negative_percent: 0.1
   artist_contrastive_config:
     temp: 0.06
     margin: 0.2
@@ -77,9 +77,9 @@ model:
   lr_start_ratio: 0.1
   lr_end_ratio: 0.1
   warmup_percent: 0.1
-  tag_freq_path: ../danbooru2023/train-70k/tag_freq.json
-  artist_freq_path: ../danbooru2023/train-70k/artist_freq.json
-  character_freq_path: ../danbooru2023/train-70k/character_freq.json
+  tag_freq_path: ../danbooru2023/train-400k/tag_freq.json
+  artist_freq_path: ../danbooru2023/train-400k/artist_freq.json
+  character_freq_path: ../danbooru2023/train-400k/character_freq.json
 
 data:
   num_tags: 8110
@@ -94,8 +94,8 @@ data:
   sample_cutoff: 192
   train_tar_dir: ../danbooru2023/train
   valid_tar_dir: ../danbooru2023/valid
-  train_parquet_path: ../danbooru2023/train-70k/images.parquet
+  train_parquet_path: ../danbooru2023/train-400k/images.parquet
   valid_parquet_path: ../danbooru2023/valid/images.parquet
-  train_tag_dict_path: ../danbooru2023/train-70k/tag_indices.json
-  train_artist_dict_path: ../danbooru2023/train-70k/artist_indices.json
-  train_character_dict_path: ../danbooru2023/train-70k/character_indices.json
+  train_tag_dict_path: ../danbooru2023/train-400k/tag_indices.json
+  train_artist_dict_path: ../danbooru2023/train-400k/artist_indices.json
+  train_character_dict_path: ../danbooru2023/train-400k/character_indices.json

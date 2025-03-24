@@ -6,10 +6,8 @@ from typing import Literal, Optional
 import lightning as L
 import matplotlib.pyplot as plt
 import numpy as np
-import peft
 import torch
 import torch.nn as nn
-from peft import LoraConfig
 from torchmetrics import AveragePrecision, MetricCollection, PrecisionRecallCurve
 from torchmetrics.classification import (
     MultilabelCoverageError,
@@ -18,6 +16,7 @@ from torchmetrics.classification import (
 )
 
 from bottle_vision.dataset import IllustDatasetItem
+from bottle_vision.lora import apply_lora
 
 from .losses import ContrastiveLossConfig, ContrastiveLossParams, LossWeights
 from .model import IllustEmbeddingModel, ModelOutput
@@ -172,29 +171,24 @@ class IllustMetricLearningModule(L.LightningModule):
             lora_params = dict(
                 target_modules=["attn.qkv"],
                 layers_pattern="blocks",
-                use_rslora=True,
+                # use_rslora=True,
             )
             lora_params.update(self.hparams.lora_config)
 
-            lora_config = LoraConfig(**lora_params)
             # Manually add norm modules to train
             norm_modules = ["backbone.norm"]
-            if lora_config.layers_to_transform is not None:
-                layer_indices = lora_config.layers_to_transform
+            if "layers_to_transform" in lora_params:
+                layer_indices = lora_params["layers_to_transform"]
                 if isinstance(layer_indices, int):
                     layer_indices = [layer_indices]
                 for i in layer_indices:
                     norm_modules.append(f"backbone.blocks.{i}.norm1")
                     norm_modules.append(f"backbone.blocks.{i}.norm2")
 
-            lora_config.modules_to_save = self.model.trainable_module_names + norm_modules
+            lora_params["modules_to_save"] = self.model.trainable_module_names + norm_modules
 
-            self.model = peft.get_peft_model(self.model, lora_config)
+            self.model, trainable_keys = apply_lora(self.model, **lora_params)
 
-            self.model.print_trainable_parameters()
-            logger.debug(f"LoRA Config: {lora_config}")
-            peft_state_dict = self._get_peft_model_state_dict()
-            trainable_keys = [k.removeprefix("base_model.model.") for k in peft_state_dict.keys()]
             logger.info(f"LoRA trainable modules: {', '.join(trainable_keys)}")
 
         # 3. torch.compile
@@ -205,10 +199,7 @@ class IllustMetricLearningModule(L.LightningModule):
             # Load weights
             state_dict = torch.load(self.hparams.weight_path)["state_dict"]
 
-            if self.hparams.use_lora:
-                result = peft.set_peft_model_state_dict(self.model, state_dict)
-            else:
-                result = self.model.load_state_dict(state_dict, strict=False)
+            result = self.model.load_state_dict(state_dict, strict=False)
 
             logger.info(f"Loaded weights from {self.hparams.weight_path}")
             logger.debug(f"All keys: {', '.join(state_dict.keys())}")
@@ -225,15 +216,10 @@ class IllustMetricLearningModule(L.LightningModule):
         return checkpoint
 
     def _get_peft_model_state_dict(self):
-        state_dict = peft.get_peft_model_state_dict(self.model)
-
-        # Manually add `base_layer.bias`, due to a bug in peft
-        # `get_peft_model_state_dict()` doesn't export bias parameters when `bias=lora_only`
-        if self.model.peft_config[self.model.active_adapter].bias == "lora_only":
-            for name, param in self.model.named_parameters():
-                if "base_layer.bias" in name:
-                    state_dict[name] = param
-
+        state_dict = {}
+        for name, param in self.model.named_parameters():
+            if param.requires_grad:
+                state_dict[name] = param
         return state_dict
 
     # ===== Training and Validation Steps =====
