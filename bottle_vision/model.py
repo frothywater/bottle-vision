@@ -64,19 +64,19 @@ class ContrastiveTemp(nn.Module):
             raise ValueError(f"Unknown temperature strategy: {temp_strategy}")
 
     def forward(self, x: torch.Tensor):
+        if isinstance(self.neg_log_temp, float):
+            return x * math.exp(self.neg_log_temp)
         return x * torch.exp(self.neg_log_temp)
 
     def mean(self):
         if isinstance(self.neg_log_temp, float):
             return math.exp(self.neg_log_temp)
-        else:
-            return torch.exp(self.neg_log_temp).mean()
+        return torch.exp(self.neg_log_temp).mean()
 
     def value(self):
         if isinstance(self.neg_log_temp, float):
             return math.exp(self.neg_log_temp)
-        else:
-            return torch.exp(self.neg_log_temp)
+        return torch.exp(self.neg_log_temp)
 
 
 class IllustEmbeddingModel(nn.Module):
@@ -319,15 +319,17 @@ class IllustEmbeddingModel(nn.Module):
         quality_score = self.quality_head(features).squeeze(-1) if "quality" in self.tasks else None
 
         tag_logits = (
-            F.normalize(tag_emb, dim=1) @ F.normalize(self.tag_prototypes, dim=1).T if tag_emb is not None else None
+            F.normalize(tag_emb, dim=1) @ F.normalize(self.tag_prototypes.weight, dim=1).T
+            if tag_emb is not None
+            else None
         )
         artist_logits = (
-            F.normalize(artist_emb, dim=1) @ F.normalize(self.artist_prototypes, dim=1).T
+            F.normalize(artist_emb, dim=1) @ F.normalize(self.artist_prototypes.weight, dim=1).T
             if artist_emb is not None
             else None
         )
         character_logits = (
-            F.normalize(character_emb, dim=1) @ F.normalize(self.character_prototypes, dim=1).T
+            F.normalize(character_emb, dim=1) @ F.normalize(self.character_prototypes.weight, dim=1).T
             if character_emb is not None
             else None
         )

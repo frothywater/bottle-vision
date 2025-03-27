@@ -101,9 +101,10 @@ class IllustDataset(Dataset):
         # Tag multi-hot vector with label smoothing
         eps = self.label_smoothing_eps
         tags = row["tags"][0].as_py()
-        tag_label = torch.full((self.num_tags,), eps / (self.num_tags - len(tags)), dtype=torch.float32)
+        negative_value = eps * len(tags) / (self.num_tags - len(tags))
+        tag_label = torch.full((self.num_tags,), negative_value, dtype=torch.float32)
         for tag in tags:
-            tag_label[tag] = 1.0 - eps / len(tags)
+            tag_label[tag] = 1.0 - eps
         if len(tags) > 0:
             tag_mask = torch.tensor(True, dtype=torch.bool)
         else:
@@ -127,11 +128,10 @@ class IllustDataset(Dataset):
         # Character multi-hot vector with label smoothing
         eps = self.label_smoothing_eps
         characters = row["characters"][0].as_py()
-        character_label = torch.full(
-            (self.num_characters,), eps / (self.num_characters - len(characters)), dtype=torch.float32
-        )
+        negative_value = eps * len(characters) / (self.num_characters - len(characters))
+        character_label = torch.full((self.num_characters,), negative_value, dtype=torch.float32)
         for character in characters:
-            character_label[character] = 1.0 - eps / len(characters)
+            character_label[character] = 1.0 - eps
         if len(characters) > 0:
             character_mask = torch.tensor(True, dtype=torch.bool)
         else:
