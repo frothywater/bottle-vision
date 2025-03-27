@@ -77,6 +77,7 @@ class IllustMetricLearningModule(L.LightningModule):
         lr_start_ratio: float = 0.1,
         lr_end_ratio: float = 0.1,
         warmup_percent: float = 0.05,
+        decay_mode: Literal["cosine", "linear"] = "cosine",
         weight_path: Optional[str] = None,
         # loss
         loss_weights: LossWeights = {},
@@ -336,9 +337,13 @@ class IllustMetricLearningModule(L.LightningModule):
             progress = (current_step - start_steps) / warmup_steps
             return self.hparams.lr_start_ratio + progress * (1 - self.hparams.lr_start_ratio)
         else:
-            # Cosine decay
             progress = (current_step - start_steps - warmup_steps) / (total_steps - start_steps - warmup_steps)
-            return self.hparams.lr_end_ratio + (1 + np.cos(progress * np.pi)) / 2 * (1 - self.hparams.lr_end_ratio)
+            if self.hparams.decay_mode == "linear":
+                # Linear decay
+                return 1 - progress * (1 - self.hparams.lr_end_ratio)
+            else:
+                # Cosine decay
+                return self.hparams.lr_end_ratio + (1 + np.cos(progress * np.pi)) / 2 * (1 - self.hparams.lr_end_ratio)
 
     def configure_optimizers(self):
         params = self.model.parameters()
