@@ -22,7 +22,10 @@ class BalancedClassBatchSampler(BatchSampler):
         sample_cutoff: Optional[int] = None,
     ):
         # Indices dictionary: label -> indices
+        # remove empty classes
+        indices_dict = {label: indices for label, indices in indices_dict.items() if indices}
         self.indices_dict = indices_dict
+
         self.classes_per_batch = classes_per_batch
         self.samples_per_class = samples_per_class
 
