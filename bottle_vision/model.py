@@ -36,9 +36,21 @@ class InferenceOutput:
 class ContrastivePrototypes(nn.Module):
     """Contrastive prototypes for multi-task metric learning model."""
 
-    def __init__(self, num_classes: int, embed_dim: int):
+    def __init__(self, num_classes: int, embed_dim: int, low_rank: Optional[int] = None):
         super().__init__()
-        self.weight = nn.Parameter(F.normalize(torch.randn(num_classes, embed_dim), dim=1))
+        if low_rank:
+            self.weight_A = nn.Parameter(torch.randn(num_classes, low_rank))
+            self.weight_B = nn.Parameter(torch.randn(low_rank, embed_dim))
+            nn.init.kaiming_uniform_(self.weight_A, a=math.sqrt(5))
+            nn.init.kaiming_uniform_(self.weight_B, a=math.sqrt(5))
+        else:
+            self.weight = nn.Parameter(torch.randn(num_classes, embed_dim))
+            nn.init.kaiming_uniform_(self.weight, a=math.sqrt(5))
+
+    def forward(self):
+        if hasattr(self, "weight_A"):
+            return self.weight_A @ self.weight_B
+        return self.weight
 
 
 class ContrastiveTemp(nn.Module):
@@ -96,6 +108,7 @@ class IllustEmbeddingModel(nn.Module):
         artist_embed_dim: int,
         character_embed_dim: int,
         skip_head: bool,
+        prototype_low_rank: Optional[int],
         cls_token: bool,
         reg_tokens: int,
         dropout: float,
@@ -143,7 +156,7 @@ class IllustEmbeddingModel(nn.Module):
                 self.tag_head = nn.Linear(self.hidden_dim, tag_embed_dim, bias=False)
                 nn.init.orthogonal_(self.tag_head.weight)
 
-            self.tag_prototypes = ContrastivePrototypes(num_tags, tag_embed_dim)
+            self.tag_prototypes = ContrastivePrototypes(num_tags, tag_embed_dim, prototype_low_rank)
             self.tag_temp = ContrastiveTemp(num_tags, tag_temp, temp_strategy)
 
             self.trainable_module_names += ["tag_head", "tag_prototypes"]
@@ -154,7 +167,7 @@ class IllustEmbeddingModel(nn.Module):
             self.character_head = nn.Linear(self.hidden_dim, character_embed_dim, bias=False)
             nn.init.orthogonal_(self.character_head.weight)
 
-            self.character_prototypes = ContrastivePrototypes(num_characters, character_embed_dim)
+            self.character_prototypes = ContrastivePrototypes(num_characters, character_embed_dim, prototype_low_rank)
             self.character_temp = ContrastiveTemp(num_characters, character_temp, temp_strategy)
 
             self.trainable_module_names += ["character_head", "character_prototypes"]
@@ -164,7 +177,7 @@ class IllustEmbeddingModel(nn.Module):
         if "artist" in tasks:
             self.artist_head = nn.Linear(self.hidden_dim, artist_embed_dim, bias=False)
 
-            self.artist_prototypes = ContrastivePrototypes(num_artists, artist_embed_dim)
+            self.artist_prototypes = ContrastivePrototypes(num_artists, artist_embed_dim, prototype_low_rank)
             self.artist_temp = ContrastiveTemp(num_artists, artist_temp, temp_strategy)
 
             self.trainable_module_names += ["artist_head", "artist_prototypes"]
@@ -194,15 +207,15 @@ class IllustEmbeddingModel(nn.Module):
         assert task in self.tasks, f"Task {task} not in model tasks: {self.tasks}"
         if task == "tag":
             head = self.tag_head
-            prototypes = self.tag_prototypes.weight
+            prototypes = self.tag_prototypes()
             temp = self.tag_temp
         elif task == "artist":
             head = self.artist_head
-            prototypes = self.artist_prototypes.weight
+            prototypes = self.artist_prototypes()
             temp = self.artist_temp
         elif task == "character":
             head = self.character_head
-            prototypes = self.character_prototypes.weight
+            prototypes = self.character_prototypes()
             temp = self.character_temp
         else:
             raise ValueError(f"Unknown task: {task}")
@@ -345,7 +358,7 @@ class IllustEmbeddingModel(nn.Module):
             quality_score=quality_score,
         )
 
-    def load_wd_tagger_weights(self, num_tags: int, num_characters: int):
+    def load_wd_tagger_weights(self, num_tags: int, num_characters: int, load_prototypes: bool = False):
         """Load weights from WD-Tagger pretrained model."""
         pretrained_model = timm.create_model("hf_hub:SmilingWolf/wd-vit-tagger-v3", pretrained=True)
         # print("source parameters:", [n for n, _ in pretrained_model.named_parameters()])
@@ -374,8 +387,8 @@ class IllustEmbeddingModel(nn.Module):
         logger.info(f"Loaded norm weights: {self.backbone.norm.weight.shape}")
 
         # head -> (current random head) -> tag and character prototypes
-        if num_tags + num_characters == pretrained_model.num_classes:
-            if "tag" in self.tasks:
+        if load_prototypes and num_tags + num_characters == pretrained_model.num_classes:
+            if "tag" in self.tasks and hasattr(self.tag_prototypes, "weight"):
                 # extract embeddings from pretrained head
                 pretrained_tag_embeddings = pretrained_model.head.weight[:num_tags]
                 pretrained_tag_embeddings = pretrained_tag_embeddings.to(self.tag_prototypes.weight.device)
@@ -392,7 +405,7 @@ class IllustEmbeddingModel(nn.Module):
                     self.tag_prototypes.weight.data = pretrained_tag_embeddings
                     logger.info(f"Loaded tag prototypes from head: {self.tag_prototypes.weight.shape}")
 
-            if "character" in self.tasks:
+            if "character" in self.tasks and hasattr(self.character_prototypes, "weight"):
                 pretrained_character_embeddings = pretrained_model.head.weight[num_tags:]
                 pretrained_character_embeddings = pretrained_character_embeddings.to(
                     self.character_prototypes.weight.device
