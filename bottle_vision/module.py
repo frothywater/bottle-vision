@@ -62,6 +62,7 @@ class IllustMetricLearningModule(L.LightningModule):
         tag_embed_dim: int = 512,
         artist_embed_dim: int = 128,
         character_embed_dim: int = 128,
+        head_mlp_ratio: Optional[int] = None,
         prototype_low_rank: Optional[int] = None,
         skip_head: bool = False,
         cls_token: bool = False,
@@ -142,6 +143,8 @@ class IllustMetricLearningModule(L.LightningModule):
             tag_embed_dim=tag_embed_dim,
             artist_embed_dim=artist_embed_dim,
             character_embed_dim=character_embed_dim,
+            head_mlp_ratio=head_mlp_ratio,
+            prototype_low_rank=prototype_low_rank,
             skip_head=skip_head,
             cls_token=cls_token,
             reg_tokens=reg_tokens,
@@ -167,7 +170,10 @@ class IllustMetricLearningModule(L.LightningModule):
     def init_model(self):
         # 1. Copy WD weights
         if self.hparams.copy_wd_weights:
-            self.model.load_wd_tagger_weights(self.hparams.num_tags, self.hparams.num_characters)
+            self.model.load_wd_tagger_weights(
+                self.hparams.num_tags, self.hparams.num_characters, load_prototypes=self.hparams.load_prototypes
+            )
+            self.model.freeze_loaded_weights()
 
         # 2. Configure LoRA
         if self.hparams.use_lora:
@@ -199,9 +205,9 @@ class IllustMetricLearningModule(L.LightningModule):
 
         # 4. (optional) Load custom weights (not strict)
         if self.hparams.weight_path is not None:
+            ckpt = torch.load(self.hparams.weight_path)
             # Load weights
-            state_dict = torch.load(self.hparams.weight_path)["state_dict"]
-
+            state_dict = ckpt["state_dict"]
             result = self.model.load_state_dict(state_dict, strict=False)
 
             logger.info(f"Loaded weights from {self.hparams.weight_path}")
@@ -350,6 +356,13 @@ class IllustMetricLearningModule(L.LightningModule):
     def configure_optimizers(self):
         params = self.model.parameters()
         optimizer = torch.optim.AdamW(params, lr=self.hparams.base_lr)
+
+        # Load optimizer state
+        if self.hparams.weight_path is not None:
+            ckpt = torch.load(self.hparams.weight_path)
+            if "optimizer_states" in ckpt:
+                optimizer.load_state_dict(ckpt["optimizer_states"][0])
+                logger.info(f"Loaded optimizer states from {self.hparams.weight_path}")
 
         # Calculate learning rate schedule
         total_steps = self.trainer.estimated_stepping_batches

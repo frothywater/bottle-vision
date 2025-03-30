@@ -108,6 +108,7 @@ class IllustEmbeddingModel(nn.Module):
         artist_embed_dim: int,
         character_embed_dim: int,
         skip_head: bool,
+        head_mlp_ratio: Optional[int],
         prototype_low_rank: Optional[int],
         cls_token: bool,
         reg_tokens: int,
@@ -153,8 +154,15 @@ class IllustEmbeddingModel(nn.Module):
                 logger.info("Skipping tag head, using backbone embeddings")
                 self.tag_head = nn.Identity()
             else:
-                self.tag_head = nn.Linear(self.hidden_dim, tag_embed_dim, bias=False)
-                nn.init.orthogonal_(self.tag_head.weight)
+                if head_mlp_ratio:
+                    self.tag_head = nn.Sequential(
+                        nn.Linear(self.hidden_dim, tag_embed_dim * head_mlp_ratio),
+                        nn.GELU(),
+                        nn.Linear(tag_embed_dim * head_mlp_ratio, tag_embed_dim),
+                    )
+                else:
+                    self.tag_head = nn.Linear(self.hidden_dim, tag_embed_dim, bias=False)
+                    # nn.init.orthogonal_(self.tag_head.weight)
 
             self.tag_prototypes = ContrastivePrototypes(num_tags, tag_embed_dim, prototype_low_rank)
             self.tag_temp = ContrastiveTemp(num_tags, tag_temp, temp_strategy)
@@ -164,8 +172,15 @@ class IllustEmbeddingModel(nn.Module):
                 self.trainable_module_names.append("tag_temp")
 
         if "character" in tasks:
-            self.character_head = nn.Linear(self.hidden_dim, character_embed_dim, bias=False)
-            nn.init.orthogonal_(self.character_head.weight)
+            if head_mlp_ratio:
+                self.character_head = nn.Sequential(
+                    nn.Linear(self.hidden_dim, character_embed_dim * head_mlp_ratio),
+                    nn.GELU(),
+                    nn.Linear(character_embed_dim * head_mlp_ratio, character_embed_dim),
+                )
+            else:
+                self.character_head = nn.Linear(self.hidden_dim, character_embed_dim, bias=False)
+                # nn.init.orthogonal_(self.character_head.weight)
 
             self.character_prototypes = ContrastivePrototypes(num_characters, character_embed_dim, prototype_low_rank)
             self.character_temp = ContrastiveTemp(num_characters, character_temp, temp_strategy)
@@ -175,7 +190,14 @@ class IllustEmbeddingModel(nn.Module):
                 self.trainable_module_names.append("character_temp")
 
         if "artist" in tasks:
-            self.artist_head = nn.Linear(self.hidden_dim, artist_embed_dim, bias=False)
+            if head_mlp_ratio:
+                self.artist_head = nn.Sequential(
+                    nn.Linear(self.hidden_dim, artist_embed_dim * head_mlp_ratio),
+                    nn.GELU(),
+                    nn.Linear(artist_embed_dim * head_mlp_ratio, artist_embed_dim),
+                )
+            else:
+                self.artist_head = nn.Linear(self.hidden_dim, artist_embed_dim, bias=False)
 
             self.artist_prototypes = ContrastivePrototypes(num_artists, artist_embed_dim, prototype_low_rank)
             self.artist_temp = ContrastiveTemp(num_artists, artist_temp, temp_strategy)
@@ -437,3 +459,25 @@ class IllustEmbeddingModel(nn.Module):
         self._copy_weights(target_block.mlp.fc2, source_block.mlp.fc2)
         self._copy_weights(target_block.norm1, source_block.norm1)
         self._copy_weights(target_block.norm2, source_block.norm2)
+
+    def freeze_loaded_weights(self):
+        """Freeze all weights that have been loaded in the load_wd_tagger_weights function."""
+        # Freeze patch embedding weights
+        self.backbone.patch_embed.proj.weight.requires_grad = False
+        self.backbone.patch_embed.proj.bias.requires_grad = False
+        logger.info("Froze patch embedding weights")
+
+        # Freeze positional embedding weights
+        self.backbone.pos_embed.requires_grad = False
+        logger.info("Froze positional embedding weights")
+
+        # Freeze weights for each transformer block
+        for block in self.backbone.blocks:
+            for param in block.parameters():
+                param.requires_grad = False
+        logger.info(f"Froze weights for {len(self.backbone.blocks)} transformer blocks")
+
+        # Freeze norm weights
+        self.backbone.norm.weight.requires_grad = False
+        self.backbone.norm.bias.requires_grad = False
+        logger.info("Froze norm weights")
