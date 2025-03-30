@@ -1,10 +1,10 @@
 seed_everything: 42
 trainer:
   accelerator: auto
-  precision: bf16-mixed # Enable mixed precision training
+  precision: bf16-mixed # Ena4ble mixed precision training
   gradient_clip_val: 1.0
   # accumulate_grad_batches: 2
-  max_steps: 10000
+  max_steps: 5000
   # val_check_interval: 1999 # batches
   check_val_every_n_epoch: 1
   default_root_dir: exp
@@ -25,25 +25,28 @@ model:
   num_tags: 8110
   num_artists: 4095
   num_characters: 2751
-  backbone_variant: vit_base_patch16_224
+  backbone_variant: vit_base_patch16_22
   cls_token: false
   reg_tokens: 0
   image_size: 448
-  tag_embed_dim: 768
+  tag_embed_dim: 512
   artist_embed_dim: 256
   character_embed_dim: 256
-  skip_head: true
+  skip_head: false
+  head_mlp_ratio: 2
+  prototype_low_rank: 128
   dropout: 0.0
   tasks: [tag]
   copy_wd_weights: true
+  load_prototypes: false
   use_pretrained_backbone: false
-  use_lora: true
+  use_lora: false
   lora_config:
-    r: 32
-    lora_alpha: 64
+    r: 8
+    lora_alpha: 16
     lora_dropout: 0.1
     bias: lora_only
-    target_modules: [attn.qkv, attn.proj, mlp.fc1, mlp.fc2]
+    target_modules: [attn.qkv, attn.proj]
     layers_to_transform: [8, 9, 10, 11]
   loss_weights:
     tag: 1.0
@@ -59,7 +62,7 @@ model:
     min_margin: 0.1
     max_margin: 0.2
     central_weight: 0.0
-    negative_percent: 0.3
+    negative_percent: 0.1
   artist_contrastive_config:
     temp: 0.06
     margin: 0.2
@@ -68,14 +71,14 @@ model:
     temp: 0.06
     margin: 0.2
     central_weight: 0.0
-  base_lr: 3e-4
+  base_lr: 1e-3
   lr_start_ratio: 0.1
   lr_end_ratio: 0.1
   warmup_percent: 0.2
-  decay_mode: linear
-  tag_freq_path: ../danbooru2023/train-400k/tag_freq.json
-  artist_freq_path: ../danbooru2023/train-400k/artist_freq.json
-  character_freq_path: ../danbooru2023/train-400k/character_freq.json
+  decay_mode: cosine
+  tag_freq_path: ../danbooru2023/train-70k/tag_freq.json
+  artist_freq_path: ../danbooru2023/train-70k/artist_freq.json
+  character_freq_path: ../danbooru2023/train-70k/character_freq.json
 
 data:
   num_tags: 8110
@@ -87,11 +90,11 @@ data:
   image_size: 448
   label_smoothing_eps: 0.1
   data_tasks: [tag]
-  sample_cutoff: 192
+  sample_cutoff: 24
   train_tar_dir: ../danbooru2023/train
   valid_tar_dir: ../danbooru2023/valid
-  train_parquet_path: ../danbooru2023/train-400k/images.parquet
+  train_parquet_path: ../danbooru2023/train-70k/images.parquet
   valid_parquet_path: ../danbooru2023/valid/images.parquet
-  train_tag_dict_path: ../danbooru2023/train-400k/tag_indices_full.json
-  train_artist_dict_path: ../danbooru2023/train-400k/artist_indices.json
-  train_character_dict_path: ../danbooru2023/train-400k/character_indices.json
+  train_tag_dict_path: ../danbooru2023/train-70k/tag_indices_full.json
+  train_artist_dict_path: ../danbooru2023/train-70k/artist_indices.json
+  train_character_dict_path: ../danbooru2023/train-70k/character_indices.json
